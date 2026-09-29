@@ -21,6 +21,13 @@ orphan RPs, wrong coupling types).
 - Abaqus/CAE with a valid license (2024 or 2025 tested; abqlib also
   targets the Python 2.7 of 2023 and older)
 
+## Two Ways to Use It
+
+- **Instruction kit** (below): the agent reads `AGENTS.md` and writes
+  noGUI scripts. Works with any agent.
+- **MCP server** (`mcp_server/`, in progress): the agent gets Abaqus
+  tools it can call directly. See [`mcp_server/README.md`](mcp_server/README.md).
+
 ## Installation
 
 Put this folder somewhere stable, e.g. `D:\tools\abaqus-automation`
@@ -60,6 +67,7 @@ abaqus-automation/
 │   ├── abqlib/                     # Categorized function library (import it)
 │   ├── script_template.py          # Boilerplate for new noGUI scripts
 │   └── inspect_model.py            # Read-only CAE model inspector
+├── mcp_server/                     # MCP server: Abaqus tools for MCP clients
 ├── tools/
 │   ├── api_lookup.py               # Offline Abaqus API lookup (abqpy stubs)
 │   ├── check_consistency.py        # Consistency checks (plain Python 3)

@@ -22,7 +22,13 @@ scripting mistakes are documented behavior nobody looked up.
    python3 tools/api_lookup.py ConcentratedForce            # class: members + docs
    python3 tools/api_lookup.py DatumCsysByThreePoints       # method: signature + args
    python3 tools/api_lookup.py --search Csys                # find names
+   python3 tools/api_lookup.py --grep contact               # names + summaries
+   python3 tools/api_lookup.py --areas                      # API areas
+   python3 tools/api_lookup.py --area Interaction           # every constructor in an area
    ```
+
+   Don't know the name? Start with `--grep` or `--area`. The same lookups
+   are available as MCP tools (`mcp_server/`).
 
    The output includes the "accessed by" path (e.g. which repository an
    object lives in) and `versionadded` notes for version-dependent
