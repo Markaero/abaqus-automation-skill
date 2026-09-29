@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), 'scripts'))
 import fake_abaqus  # noqa: E402
 C = fake_abaqus.install()
 
-from abqlib import rp, mass, loads, constraints, bcs, cleanup, job, util  # noqa: E402
+from abqlib import rp, mass, loads, constraints, bcs, cleanup, jobs, util  # noqa: E402
 
 util.set_logger(lambda msg: None)
 
@@ -55,6 +55,23 @@ class MassTests(unittest.TestCase):
         self.assertAlmostEqual(a.engineeringFeatures.inertias['Fins'].mass, 0.1)
         mass.ensure_point_mass(a, 'Fins', keys, total_mass=0.8)   # idempotent
         self.assertAlmostEqual(a.engineeringFeatures.inertias['Fins'].mass, 0.2)
+
+
+class NSMTests(unittest.TestCase):
+    def test_nsm_lives_in_inertias_on_part_or_assembly(self):
+        m = fake_abaqus.Model()
+        part = fake_abaqus.Part('P')
+        part.sets['Payload'] = fake_abaqus.Obj(name='Payload')
+        mass.ensure_nsm(part, 'NSM', 'Payload', total_mass=0.5)
+        mass.ensure_nsm(part, 'NSM', 'Payload', total_mass=0.7)   # idempotent
+        nsm = part.engineeringFeatures.inertias['NSM']
+        self.assertEqual(type(nsm).__name__, 'NonstructuralMass')
+        self.assertEqual(nsm.magnitude, 0.7)
+        self.assertIs(nsm.units, C.TOTAL_MASS)
+        a = m.rootAssembly
+        a.sets['Asm_Set'] = fake_abaqus.Obj(name='Asm_Set')
+        mass.ensure_nsm(a, 'NSM_A', 'Asm_Set', total_mass=0.1)
+        self.assertIn('NSM_A', a.engineeringFeatures.inertias)
 
 
 class LoadTests(unittest.TestCase):
@@ -116,6 +133,28 @@ class ConstraintTests(unittest.TestCase):
         constraints.ensure_tie(self.m, 'T', 'a', 'b')
         self.assertEqual(seen[0]['master'], 'a')
 
+    def test_beam_ring_needs_2024_constant(self):
+        import importlib
+        saved = C.ROTATIONAL_STRUCTURAL
+        del C.ROTATIONAL_STRUCTURAL          # simulate Abaqus <= 2023
+        try:
+            importlib.reload(constraints)    # module import must not need it
+            self.assertRaises(RuntimeError, constraints.ensure_coupling,
+                              self.m, 'C', self.k, 'ring', beam_ring=True)
+            constraints.ensure_coupling(self.m, 'C2', self.k, 'surf')   # plain coupling still works
+        finally:
+            C.ROTATIONAL_STRUCTURAL = saved
+            importlib.reload(constraints)
+
+    def test_cylindrical_csys_uses_documented_point2(self):
+        a = self.m.rootAssembly
+        cid = constraints.ensure_cylindrical_csys(a, 'Cyl', (0, 0, 0), (0, 1, 0), (0, 0, 1))
+        kw = a.csys_calls[-1]
+        self.assertIn('point2', kw)
+        self.assertNotIn('line2', kw)
+        self.assertEqual(constraints.ensure_cylindrical_csys(a, 'Cyl', (0, 0, 0), (0, 1, 0), (0, 0, 1)), cid)
+        self.assertEqual(len(a.csys_calls), 1)       # reused by name
+
     def test_pair_equations_names_and_csys(self):
         names = constraints.pair_equations(self.m, 'Eq', [('a1', 'b1')], dofs=(1, 2), csys_id=7)
         self.assertEqual(names, ['Eq_D1_1', 'Eq_D2_1'])
@@ -160,11 +199,11 @@ def _read(path):
 class JobTests(unittest.TestCase):
     def test_sta_parsing(self):
         d = tempfile.mkdtemp()
-        self.assertIsNone(job.job_succeeded('J', d))
+        self.assertIsNone(jobs.job_succeeded('J', d))
         _write(os.path.join(d, 'J.sta'), '...\n THE ANALYSIS HAS COMPLETED SUCCESSFULLY\n')
-        self.assertTrue(job.job_succeeded('J', d))
+        self.assertTrue(jobs.job_succeeded('J', d))
         _write(os.path.join(d, 'K.sta'), 'THE ANALYSIS HAS NOT BEEN COMPLETED\n')
-        self.assertFalse(job.job_succeeded('K', d))
+        self.assertFalse(jobs.job_succeeded('K', d))
 
 
 class UtilTests(unittest.TestCase):
@@ -185,3 +224,30 @@ class UtilTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class InspectModelSmokeTest(unittest.TestCase):
+    """Runs scripts/inspect_model.py's reporters on a fake model (main() not called)."""
+
+    def test_inspector_reports_nsm_point_mass_and_load_states(self):
+        path = os.path.join(os.path.dirname(HERE), 'scripts', 'inspect_model.py')
+        src = _read(path)
+        self.assertTrue(src.rstrip().endswith('main()'))
+        ns = {'__name__': 'inspect_model_under_test', 'print': lambda *a, **k: None}
+        exec(compile(src.rstrip()[:-len('main()')], path, 'exec'), ns)
+        m = fake_abaqus.Model()
+        a = m.rootAssembly
+        k = rp.ensure_rp(a, (0, 0, 0), set_name='S')
+        mass.ensure_point_mass(a, 'PM', [k], total_mass=0.2)
+        part = fake_abaqus.Part('P')
+        part.sets['Payload'] = fake_abaqus.Obj(name='Payload', elements=[1, 2], nodes=[])
+        m.parts['P'] = part
+        mass.ensure_nsm(part, 'NSM', 'Payload', total_mass=0.5)
+        loads.ensure_cforce(m, 'F', a.sets['S'], (10.0, None, None))
+        m.steps['Step-1'].loadStates['F'] = fake_abaqus.Obj(cf1=10.0, cf2=C.UNSET, status=C.CREATED)
+        snap = ns['inspect_model'](m)
+        self.assertEqual(snap['inertias']['part=P/NSM']['magnitude'], 0.5)
+        self.assertEqual(snap['inertias']['assembly/PM']['mass_per_point'], 0.2)
+        self.assertEqual(snap['mass_summary']['nsm_total_mass'], 0.5)
+        self.assertEqual(snap['loads']['F']['steps']['Step-1']['values'], {'cf1': 10.0})
+        self.assertEqual([s['type'] for s in snap['steps']], ['InitialStep', 'StaticStep'])

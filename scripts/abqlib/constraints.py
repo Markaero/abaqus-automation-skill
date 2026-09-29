@@ -3,8 +3,8 @@
 
 import regionToolset
 from abaqusConstants import (ON, OFF, DISTRIBUTING, KINEMATIC, WHOLE_SURFACE,
-                             UNIFORM, ROTATIONAL_STRUCTURAL, CYLINDRICAL)
-from caeModules import *   # binds model.Coupling/Tie/Equation in noGUI (API gotcha #10)
+                             UNIFORM, CYLINDRICAL)
+from caeModules import *   # binds model.Coupling/Tie/Equation in noGUI
 
 from abqlib.util import log, status, has_key
 
@@ -14,7 +14,8 @@ def ensure_coupling(model, name, control_rp_key, surface, kind='DISTRIBUTING',
     """RP -> surface/node-region coupling. kind: 'DISTRIBUTING' (RBE3, no added stiffness) or 'KINEMATIC' (RBE2, rigid).
 
     surface: an assembly Surface/Set or a Region. For a beam node ring pass
-    beam_ring=True (DISTRIBUTING + ROTATIONAL_STRUCTURAL to carry moments).
+    beam_ring=True (DISTRIBUTING + ROTATIONAL_STRUCTURAL to carry moments);
+    rotationalCouplingType exists only in Abaqus 2024+.
     """
     asm = model.rootAssembly
     existed = has_key(model.constraints, name)
@@ -31,6 +32,11 @@ def ensure_coupling(model, name, control_rp_key, surface, kind='DISTRIBUTING',
         kw['couplingType'] = DISTRIBUTING
         kw['weightingMethod'] = UNIFORM
         if beam_ring:
+            try:
+                from abaqusConstants import ROTATIONAL_STRUCTURAL
+            except ImportError:
+                raise RuntimeError('beam_ring=True needs Abaqus 2024+ '
+                                   '(rotationalCouplingType was added in 2024)')
             kw['rotationalCouplingType'] = ROTATIONAL_STRUCTURAL
     elif kind.upper() == 'KINEMATIC':
         kw['couplingType'] = KINEMATIC
@@ -89,15 +95,15 @@ def find_cylindrical_csys(assembly, name=None):
     return None
 
 
-def ensure_cylindrical_csys(assembly, name, origin, point1, line2):
-    """Cylindrical datum csys (R toward point1, T along line2, Z = R x T). Returns its datum id; reuses by name."""
+def ensure_cylindrical_csys(assembly, name, origin, point1, point2):
+    """Cylindrical datum csys: r-axis toward point1, point2 in the r-theta plane, z = r x theta. Returns the datum id; reuses by name."""
     cid = find_cylindrical_csys(assembly, name)
     if cid is not None:
         log('  Csys %s reused (id=%s)' % (name, cid))
         return cid
     feat = assembly.DatumCsysByThreePoints(name=name, coordSysType=CYLINDRICAL,
                                            origin=tuple(origin), point1=tuple(point1),
-                                           line2=tuple(line2))
+                                           point2=tuple(point2))
     log('  Csys %s created (id=%s)' % (name, feat.id))
     return feat.id
 

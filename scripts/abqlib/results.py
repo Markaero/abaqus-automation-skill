@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """ODB post-processing (works in `abaqus python` and noGUI): history values, IR summary, field max.
 
-The launcher must match the Abaqus version that wrote the ODB (gotcha #34).
+The launcher must match the Abaqus version that wrote the ODB (API trap #10).
 """
 
 G_MMS2 = 9806.65
@@ -54,7 +54,7 @@ def ir_summary(odb_path, step=None):
 
 
 def _find_set(odb, set_name, kind):
-    """Case-insensitive lookup of an element/node set on the assembly or any instance (gotcha: ODB uppercases)."""
+    """Case-insensitive lookup of an element/node set on the assembly or any instance (ODB set names are often uppercase)."""
     attr = 'elementSets' if kind == 'element' else 'nodeSets'
     ra = odb.rootAssembly
     repos = [getattr(ra, attr)] + [getattr(ra.instances[i], attr) for i in ra.instances.keys()]

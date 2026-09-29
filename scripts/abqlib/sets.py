@@ -20,7 +20,7 @@ def promote_part_set(model, part_name, set_name, instance_name,
 
     Uses SetFromElementLabels/SetFromNodeLabels, which only need the
     instance *name*, so it also works on imported models with a broken
-    inst.part accessor (gotcha #14).
+    inst.part accessor (API trap #13).
     """
     asm = model.rootAssembly
     pset = model.parts[part_name].sets[set_name]
@@ -43,7 +43,7 @@ def promote_part_set(model, part_name, set_name, instance_name,
 
 
 def ensure_surface(assembly, name, elements, side=1):
-    """Create or replace an element-based surface. side=1 -> SPOS (side1Elements), 2 -> SNEG (gotcha #6)."""
+    """Create or replace an element-based surface. side=1 -> SPOS (side1Elements), 2 -> SNEG (API trap #21)."""
     existed = has_key(assembly.surfaces, name)
     if existed:
         del assembly.surfaces[name]

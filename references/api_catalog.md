@@ -9,7 +9,7 @@ Pick functions from this catalog and compose them into a noGUI script
 ```python
 import sys
 sys.path.insert(0, ABQLIB_PATH)            # from the User inputs block
-from abqlib import session, sets, rp, constraints, bcs, loads, mass, steps, job, odb, cleanup
+from abqlib import cae, sets, rp, constraints, bcs, loads, mass, steps, jobs, results, cleanup
 from abqlib.util import Report, get_last_step
 ```
 
@@ -21,30 +21,30 @@ If no function fits, write the API call directly using
 
 | Module | What it covers |
 |---|---|
-| `session` | Model database: open/backup/save a CAE, get/copy models. |
+| `cae` | Model database: open/backup/save a CAE, get/copy models. |
 | `sets` | Sets & surfaces: persistent assembly sets, part->assembly promotion, surfaces, node picking. |
 | `rp` | Reference points: find by coordinate, create-if-missing, regions, delete. |
 | `constraints` | Constraints: couplings (DISTRIBUTING/KINEMATIC), ties, equations, cylindrical csys. |
 | `bcs` | Boundary conditions: displacement BC, encastre. |
 | `loads` | Loads: concentrated force, moment, pressure, gravity, inertia relief, per-step values, suppress. |
-| `mass` | Masses: point masses at RPs (total auto-split), non-structural mass on part sets. |
+| `mass` | Masses: point masses at RPs (total auto-split), non-structural mass on sets. |
 | `steps` | Steps & output requests: static step, field outputs, history outputs. |
-| `job` | Jobs: create/submit/wait, skip-if-done, success check from .sta, write .inp. |
-| `odb` | ODB post-processing (works in `abaqus python` and noGUI): history values, IR summary, field max. |
+| `jobs` | Jobs: create/submit/wait, skip-if-done, success check from .sta, write .inp. |
+| `results` | ODB post-processing (works in `abaqus python` and noGUI): history values, IR summary, field max. |
 | `cleanup` | Cleanup: delete features in the safe order (loads -> constraints -> masses -> sets/surfaces -> RPs). |
 | `util` | Shared helpers: logging sink, report file, repository lookups, last step. |
 
-## `abqlib.session`
+## `abqlib.cae`
 
 Model database: open/backup/save a CAE, get/copy models.
 
 | Function | Does |
 |---|---|
-| `open_cae(cae_path)` | openMdb with a clear message when the CAE is locked by the GUI (gotcha #21). |
+| `open_cae(cae_path)` | openMdb with a clear message when the CAE is locked by the GUI (API trap #6). |
 | `backup_cae(cae_path)` | Copy <cae>.<YYYYmmdd_HHMMSS>.bak next to the CAE; return the backup path. |
 | `save_cae(mdb, cae_path=None, backup=True)` | Backup (optional) then mdb.save(). Call only after all edits succeeded. |
 | `get_model(mdb, name)` | mdb.models[name] with the list of available models in the error. |
-| `copy_model(mdb, src_name, new_name, overwrite=True)` | Deep-copy a model and regenerate its assembly. RP ids may change (gotcha #10). |
+| `copy_model(mdb, src_name, new_name, overwrite=True)` | Deep-copy a model and regenerate its assembly. RP ids may change: look RPs up by coordinate. |
 
 ## `abqlib.sets`
 
@@ -54,7 +54,7 @@ Sets & surfaces: persistent assembly sets, part->assembly promotion, surfaces, n
 |---|---|
 | `ensure_set(assembly, name, **entities)` | Create or replace an assembly Set; kwargs as Set() (nodes=, elements=, referencePoints=, faces=...). |
 | `promote_part_set(model, part_name, set_name, instance_name, node_suffix='_Node', elements=True, nodes=True)` | Copy a part-level set to the assembly by labels: elements keep the name, nodes get node_suffix. |
-| `ensure_surface(assembly, name, elements, side=1)` | Create or replace an element-based surface. side=1 -> SPOS (side1Elements), 2 -> SNEG (gotcha #6). |
+| `ensure_surface(assembly, name, elements, side=1)` | Create or replace an element-based surface. side=1 -> SPOS (side1Elements), 2 -> SNEG (API trap #21). |
 | `surface_from_set(assembly, name, set_name, side=1)` | ensure_surface over the elements of an existing assembly set. |
 | `nearest_node(instance, xyz)` | (node, distance) of the instance node closest to xyz (linear scan). |
 | `node_set_by_coords(assembly, instance_name, name, points, tol=1.0)` | Assembly node set of the nodes nearest to each point; raises if any is farther than tol. |
@@ -66,12 +66,12 @@ Reference points: find by coordinate, create-if-missing, regions, delete.
 
 | Function | Does |
 |---|---|
-| `find_rp(assembly, xyz, tol=10.0)` | Key of the nearest live RP within tol of xyz, else None. Never trust stored ids (gotcha #10). |
+| `find_rp(assembly, xyz, tol=10.0)` | Key of the nearest live RP within tol of xyz, else None. Look RPs up by coordinate: ids can change after a model copy. |
 | `ensure_rp(assembly, xyz, tol=10.0, set_name=None)` | Reuse the RP near xyz or create one; optionally (re)build a named set on it. Returns the RP key. |
-| `rp_region(assembly, keys)` | regionToolset.Region over one or more RP keys (handles the 1-tuple comma, gotcha #5). |
+| `rp_region(assembly, keys)` | regionToolset.Region over one RP key or a list of keys. |
 | `list_rps(assembly)` | List of dicts {feature, id, xyz} for all live RPs. |
 | `find_duplicate_rps(assembly, tol=10.0)` | Pairs (feature_a, feature_b, distance) of RPs closer than tol. |
-| `delete_rps_near(assembly, points, tol=10.0)` | Delete RP features near any of points. Delete loads/constraints/sets using them FIRST (gotcha #8). |
+| `delete_rps_near(assembly, points, tol=10.0)` | Delete RP features near any of points. Delete loads/constraints/sets using them first (see cleanup.delete_in_order). |
 
 ## `abqlib.constraints`
 
@@ -84,7 +84,7 @@ Constraints: couplings (DISTRIBUTING/KINEMATIC), ties, equations, cylindrical cs
 | `ensure_tie(model, name, main_surface, secondary_surface, position_tolerance=None, adjust=ON, tie_rotations=ON)` | Tie constraint. Uses main/secondary (2022+) and falls back to master/slave on older Abaqus. |
 | `ensure_equation(model, name, terms)` | *Equation from terms ((coef, set_name, dof[, csys_id]), ...). Sets must hold ONE node each. |
 | `find_cylindrical_csys(assembly, name=None)` | Datum id of a CYLINDRICAL csys (by feature name if given, else the first found), or None. |
-| `ensure_cylindrical_csys(assembly, name, origin, point1, line2)` | Cylindrical datum csys (R toward point1, T along line2, Z = R x T). Returns its datum id; reuses by name. |
+| `ensure_cylindrical_csys(assembly, name, origin, point1, point2)` | Cylindrical datum csys: r-axis toward point1, point2 in the r-theta plane, z = r x theta. Returns the datum id; reuses by name. |
 | `pair_equations(model, prefix, pairs, dofs=(1, 2), csys_id=None)` | Two-node equations u_a - u_b = 0 per DOF for each (set_a, set_b) pair. Names <prefix>_D<dof>_<i>. |
 
 ## `abqlib.bcs`
@@ -104,10 +104,10 @@ Loads: concentrated force, moment, pressure, gravity, inertia relief, per-step v
 |---|---|
 | `ensure_cforce(model, name, region, cf, step=None, follower=False, csys=None)` | Concentrated force cf=(fx, fy, fz) in N on a set/region. step defaults to the last step. |
 | `ensure_moment(model, name, region, cm, step=None, follower=False, csys=None)` | Moment cm=(mx, my, mz) in N*mm (convert N*m x1000) on a set/region. |
-| `ensure_pressure(model, name, surface, magnitude, step=None, field=None)` | Pressure in MPa on a surface. POSITIVE magnitude pushes AGAINST the bound side's normal (gotcha #6/#23). |
+| `ensure_pressure(model, name, surface, magnitude, step=None, field=None)` | Pressure in MPa on a surface. POSITIVE magnitude pushes AGAINST the bound side's normal (API trap #21). |
 | `ensure_gravity(model, name, accel, step=None, region=None)` | Gravity body load accel=(ax, ay, az) in mm/s^2 (1 g = 9806.65). region=None -> whole model. |
 | `ensure_inertia_relief(model, name='InertiaRelief', step=None, dofs=(1, 1, 1, 1, 1, 1))` | Inertia relief on the chosen free-body DOFs; solver reports IRA/IRF/IRM history outputs. |
-| `load_values(model, name, step=None)` | Numeric values of a load in a step from loadStates - the source of truth after re-import (gotcha #25). |
+| `load_values(model, name, step=None)` | Numeric values of a load in a step, read from loadStates (loads have no cf1/magnitude members). |
 | `set_load_values(model, name, step=None, **values)` | Change magnitudes of an existing load in a step, e.g. set_load_values(m, 'Thrust', cf3=1e4). |
 | `suppress_loads(model, names)` | Suppress loads by name (in memory). Don't save afterwards if the change is diagnostic only. |
 | `resume_loads(model, names)` | Resume loads previously suppressed. |
@@ -115,12 +115,12 @@ Loads: concentrated force, moment, pressure, gravity, inertia relief, per-step v
 
 ## `abqlib.mass`
 
-Masses: point masses at RPs (total auto-split), non-structural mass on part sets.
+Masses: point masses at RPs (total auto-split), non-structural mass on sets.
 
 | Function | Does |
 |---|---|
-| `ensure_point_mass(assembly, name, rp_keys, total_mass)` | PointMassInertia of total_mass (tonne) spread equally over rp_keys - pre-divides per RP (gotcha #9). |
-| `ensure_nsm(part, name, set_name, total_mass, distribution=MASS_PROPORTIONAL)` | Non-structural TOTAL_MASS (tonne) on a part-level set, distributed MASS_PROPORTIONAL by default. |
+| `ensure_point_mass(assembly, name, rp_keys, total_mass)` | PointMassInertia of total_mass (tonne) spread equally over rp_keys - the API applies mass to EACH point, so this pre-divides. |
+| `ensure_nsm(owner, name, set_name, total_mass, distribution=MASS_PROPORTIONAL)` | Non-structural TOTAL_MASS (tonne) on a set of a part or the assembly (owner), MASS_PROPORTIONAL by default. |
 
 ## `abqlib.steps`
 
@@ -132,7 +132,7 @@ Steps & output requests: static step, field outputs, history outputs.
 | `set_field_outputs(model, variables=('S', 'U', 'RF'), request='F-Output-1')` | Set the variables of a field output request (default F-Output-1). |
 | `ensure_history_output(model, name, step, variables, region=None)` | Create or replace a history output request (e.g. variables=('IRA1','IRF1',...) or energies). |
 
-## `abqlib.job`
+## `abqlib.jobs`
 
 Jobs: create/submit/wait, skip-if-done, success check from .sta, write .inp.
 
@@ -142,7 +142,7 @@ Jobs: create/submit/wait, skip-if-done, success check from .sta, write .inp.
 | `run_job(mdb, job_name, model_name, work_dir=None, cpus=4, skip_if_done=True, memory_pct=90, **job_kw)` | Submit and wait. Skips if <job>.odb exists and .sta says success. Returns True/False/None (see job_succeeded). |
 | `write_input(mdb, job_name, model_name, work_dir=None)` | Write <job>.inp without running (to grep SPOS/SNEG, check keywords, etc.). |
 
-## `abqlib.odb`
+## `abqlib.results`
 
 ODB post-processing (works in `abaqus python` and noGUI): history values, IR summary, field max.
 
@@ -159,7 +159,7 @@ Cleanup: delete features in the safe order (loads -> constraints -> masses -> se
 
 | Function | Does |
 |---|---|
-| `delete_in_order(model, loads=(), constraints=(), inertias=(), sets=(), surfaces=(), rp_points=(), rp_tol=10.0)` | Delete named objects in the order Abaqus requires (gotcha #8); missing names are skipped. Returns what was deleted. |
+| `delete_in_order(model, loads=(), constraints=(), inertias=(), sets=(), surfaces=(), rp_points=(), rp_tol=10.0)` | Delete named objects dependents-first (loads, constraints, inertias, sets, surfaces, then RPs); missing names are skipped. Returns what was deleted. |
 | `delete_by_prefix(model, prefix, loads=True, constraints=True, sets=True, surfaces=True)` | Delete loads/constraints/sets/surfaces whose name starts with prefix, in safe order. |
 
 ## `abqlib.util`

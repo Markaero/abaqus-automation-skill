@@ -9,7 +9,7 @@ from abqlib.util import log, has_key
 
 
 def open_cae(cae_path):
-    """openMdb with a clear message when the CAE is locked by the GUI (gotcha #21)."""
+    """openMdb with a clear message when the CAE is locked by the GUI (API trap #6)."""
     from abaqus import openMdb
     if not os.path.exists(cae_path):
         raise IOError('CAE not found: %s' % cae_path)
@@ -45,7 +45,7 @@ def get_model(mdb, name):
 
 
 def copy_model(mdb, src_name, new_name, overwrite=True):
-    """Deep-copy a model and regenerate its assembly. RP ids may change (gotcha #10)."""
+    """Deep-copy a model and regenerate its assembly. RP ids may change: look RPs up by coordinate."""
     if has_key(mdb.models, new_name):
         if not overwrite:
             raise ValueError('model %r already exists' % new_name)

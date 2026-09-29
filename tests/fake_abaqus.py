@@ -16,7 +16,8 @@ class Const(object):
 
 _CONSTS = ['ON', 'OFF', 'UNSET', 'UNIFORM', 'FIELD', 'DISTRIBUTING', 'KINEMATIC',
            'WHOLE_SURFACE', 'ROTATIONAL_STRUCTURAL', 'CYLINDRICAL', 'SPECIFIED',
-           'TOTAL_MASS', 'MASS_PROPORTIONAL', 'ANALYSIS', 'PERCENTAGE']
+           'TOTAL_MASS', 'MASS_PROPORTIONAL', 'ANALYSIS', 'PERCENTAGE',
+           'CREATED', 'PROPAGATED']
 
 
 class Region(object):
@@ -53,6 +54,50 @@ class Feature(Obj):
     pass
 
 
+class PointMassInertia(Obj):
+    pass
+
+
+class NonstructuralMass(Obj):
+    pass
+
+
+class InitialStep(Obj):
+    pass
+
+
+class StaticStep(Obj):
+    pass
+
+
+class ConcentratedForce(Obj):
+    pass
+
+
+class EngineeringFeatures(object):
+    """Point masses AND non-structural masses share the 'inertias' repository."""
+
+    def __init__(self, inertias):
+        self.inertias = inertias
+
+    def PointMassInertia(self, **kw):
+        self.inertias[kw['name']] = PointMassInertia(**kw)
+        return self.inertias[kw['name']]
+
+    def NonstructuralMass(self, **kw):
+        self.inertias[kw['name']] = NonstructuralMass(**kw)
+        return self.inertias[kw['name']]
+
+
+class Part(object):
+    def __init__(self, name):
+        self.name = name
+        self.elements = []
+        self.nodes = []
+        self.sets = Repo()
+        self.engineeringFeatures = EngineeringFeatures(Repo())
+
+
 class Assembly(object):
     def __init__(self, log):
         self.features = Repo()
@@ -60,9 +105,11 @@ class Assembly(object):
         self.sets = Repo()
         self.surfaces = Repo()
         self.instances = Repo()
-        self.engineeringFeatures = Obj(inertias=Repo(), PointMassInertia=self._pmi)
+        self.datums = Repo()
+        self.engineeringFeatures = EngineeringFeatures(Repo())
         self._next = 1
         self.log = log
+        self.csys_calls = []
 
     def ReferencePoint(self, point):
         fid = self._next
@@ -92,9 +139,14 @@ class Assembly(object):
             del self.features[n]
             del self.referencePoints[fid]
 
-    def _pmi(self, **kw):
-        self.engineeringFeatures.inertias[kw['name']] = Obj(**kw)
-        return self.engineeringFeatures.inertias[kw['name']]
+    def DatumCsysByThreePoints(self, **kw):
+        self.csys_calls.append(kw)
+        fid = self._next
+        self._next += 1
+        f = Feature(id=fid, name=kw['name'])
+        self.features[kw['name']] = f
+        self.datums[fid] = Obj(coordSysType=kw['coordSysType'])
+        return f
 
 
 class LoggingRepo(Repo):
@@ -118,15 +170,17 @@ class Model(object):
         self.loads = LoggingRepo('load', self.dellog)
         self.constraints = LoggingRepo('constraint', self.dellog)
         self.boundaryConditions = Repo()
+        self.parts = Repo()
         self.steps = Repo()
-        for s in steps:
-            self.steps[s] = Obj(name=s, loadStates=Repo())
+        for i, s in enumerate(steps):
+            cls = InitialStep if i == 0 else StaticStep
+            self.steps[s] = cls(name=s, loadStates=Repo())
         self.calls = []
 
     def _make(self, repo, kind):
         def f(**kw):
             self.calls.append((kind, kw))
-            o = Obj(kind=kind, **kw)
+            o = (ConcentratedForce if kind == 'ConcentratedForce' else Obj)(kind=kind, **kw)
             repo[kw['name']] = o
             return o
         return f

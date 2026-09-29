@@ -51,7 +51,7 @@ def ensure_moment(model, name, region, cm, step=None, follower=False, csys=None)
 
 
 def ensure_pressure(model, name, surface, magnitude, step=None, field=None):
-    """Pressure in MPa on a surface. POSITIVE magnitude pushes AGAINST the bound side's normal (gotcha #6/#23).
+    """Pressure in MPa on a surface. POSITIVE magnitude pushes AGAINST the bound side's normal (API trap #21).
 
     field: name of a MappedField/analytical field -> distributionType=FIELD and
     magnitude acts as a (sign-flippable) scale.
@@ -98,7 +98,7 @@ _VALUE_ATTRS = ('cf1', 'cf2', 'cf3', 'cm1', 'cm2', 'cm3', 'magnitude', 'comp1', 
 
 
 def load_values(model, name, step=None):
-    """Numeric values of a load in a step from loadStates - the source of truth after re-import (gotcha #25)."""
+    """Numeric values of a load in a step, read from loadStates (loads have no cf1/magnitude members)."""
     step = step or get_last_step(model)
     state = model.steps[step].loadStates[name]
     out = {}
@@ -124,7 +124,7 @@ def set_load_values(model, name, step=None, **values):
         ld.setValues(**values)
     elif created_in is not None:
         ld.setValuesInStep(stepName=step, **values)
-    else:   # createStepName unreadable (gotcha #29): try the step, fall back
+    else:   # createStepName is not a member of most loads: try the step, fall back
         try:
             ld.setValuesInStep(stepName=step, **values)
         except Exception:

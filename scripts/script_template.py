@@ -4,7 +4,7 @@
 Copy this file, rename it, edit the "User inputs" block and the step
 function(s). Pick library calls from references/api_catalog.md.
 Conventions:
-- utf-8 encoding header (avoid mbcs, gotcha #35)
+- utf-8 encoding header (avoid mbcs, API trap #4)
 - every tunable value lives in the "User inputs" block - no config.py
 - abqlib ensure_* calls are idempotent: re-running gives the same model
 - results go to REPORT_PATH (text) + sibling .json; stdout is unreliable
@@ -39,7 +39,7 @@ RP_TOLERANCE  = 10.0                # mm, RP coordinate match tolerance
 # Library
 # ----------------------------------------------------------------------
 sys.path.insert(0, ABQLIB_PATH)
-from abqlib import session, rp, loads
+from abqlib import cae, rp, loads
 from abqlib.util import Report, log
 
 # ----------------------------------------------------------------------
@@ -59,11 +59,11 @@ def example_step(model):
 # ----------------------------------------------------------------------
 report = Report(REPORT_PATH)
 try:
-    mdb = session.open_cae(CAE_PATH)          # fails clearly if open in the GUI
-    model = session.get_model(mdb, MODEL_NAME)
+    mdb = cae.open_cae(CAE_PATH)              # fails clearly if open in the GUI
+    model = cae.get_model(mdb, MODEL_NAME)
     log('=== %s ===' % MODEL_NAME)
     report.data['example_step'] = example_step(model)
-    session.save_cae(mdb, CAE_PATH, backup=BACKUP_CAE)
+    cae.save_cae(mdb, CAE_PATH, backup=BACKUP_CAE)
     log('Done.')
 except Exception:
     log('FAILED - CAE not saved:')

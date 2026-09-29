@@ -7,7 +7,7 @@ from abqlib.rp import delete_rps_near
 
 def delete_in_order(model, loads=(), constraints=(), inertias=(), sets=(),
                     surfaces=(), rp_points=(), rp_tol=10.0):
-    """Delete named objects in the order Abaqus requires (gotcha #8); missing names are skipped. Returns what was deleted."""
+    """Delete named objects dependents-first (loads, constraints, inertias, sets, surfaces, then RPs); missing names are skipped. Returns what was deleted."""
     asm = model.rootAssembly
     done = {'loads': [], 'constraints': [], 'inertias': [], 'sets': [],
             'surfaces': [], 'rps': []}
