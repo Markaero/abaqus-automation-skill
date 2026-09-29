@@ -22,7 +22,7 @@ Notes:
   `mdb.Model(objectToCopy=...)` followed by `assembly.rotate(...)` and
   feature deletion/recreation.
 - New scripts use the "User inputs" block pattern
-  (see `scripts/skill_template.py`), not a shared config module.
+  (see `scripts/script_template.py`), not a shared config module.
 - Scripts mutate the CAE in place (`openMdb` / `mdb.save()`).
 
 ## Adding a New Project

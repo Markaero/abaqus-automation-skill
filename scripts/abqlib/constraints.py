@@ -4,7 +4,7 @@
 import regionToolset
 from abaqusConstants import (ON, OFF, DISTRIBUTING, KINEMATIC, WHOLE_SURFACE,
                              UNIFORM, ROTATIONAL_STRUCTURAL, CYLINDRICAL)
-from caeModules import *   # binds model.Coupling/Tie/Equation in noGUI (gotcha #10 in SKILL)
+from caeModules import *   # binds model.Coupling/Tie/Equation in noGUI (API gotcha #10)
 
 from abqlib.util import log, status, has_key
 

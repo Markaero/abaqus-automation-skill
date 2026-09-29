@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Consistency checks for this skill. Run with plain Python 3 (no Abaqus):
+"""Consistency checks for this kit. Run with plain Python 3 (no Abaqus):
 
-    python3 tools/check_skill.py
+    python3 tools/check_consistency.py
 
-Catches the drift that bit earlier versions: the skill contradicting its
+Catches the drift that bit earlier versions: the kit contradicting its
 own gotchas in scripts and code snippets.
 """
 
@@ -43,9 +43,9 @@ for rel in script_files():
     if not read(rel).startswith('# -*- coding: utf-8 -*-'):
         errors.append('%s: first line must be "# -*- coding: utf-8 -*-"' % rel)
 
-# 2. Code (scripts + python snippets) must follow the skill's own gotchas
+# 2. Code (scripts + python snippets) must follow the kit's own gotchas
 code_sources = [(rel, read(rel)) for rel in script_files()]
-md_files = ['SKILL.md'] + [os.path.join('references', n)
+md_files = ['AGENTS.md', 'SKILL.md'] + [os.path.join('references', n)
                            for n in sorted(os.listdir(os.path.join(ROOT, 'references')))
                            if n.endswith('.md')]
 for rel in md_files:
@@ -80,10 +80,19 @@ import gen_catalog  # noqa: E402
 if read(os.path.join('references', 'api_catalog.md')) != gen_catalog.build():
     errors.append('references/api_catalog.md is stale: run python3 tools/gen_catalog.py')
 
-# 6. SKILL.md frontmatter
+# 6. SKILL.md is a frontmatter shim pointing at AGENTS.md
 skill = read('SKILL.md')
 if not re.match(r'---\nname: [a-z0-9-]+\ndescription: .+?\n---\n', skill, re.S):
     errors.append('SKILL.md: missing/invalid name+description frontmatter')
+if 'AGENTS.md' not in skill or len(skill.split('\n---\n', 1)[-1].splitlines()) > 15:
+    errors.append('SKILL.md: body must stay a short pointer to AGENTS.md')
+
+# 7. AGENTS.md usage part stays agent-neutral (no vendor tool names/paths)
+usage = read('AGENTS.md').split('## Maintaining This Kit')[0]
+for pat in (r'\.claude/', r'~/\.codex', r'\bSkill tool\b', r'AskUserQuestion', r'\bTodoWrite\b',
+            r'mcp__', r'claude\.ai'):
+    if re.search(pat, usage):
+        errors.append('AGENTS.md: vendor-specific reference %r in the usage part' % pat)
 
 if errors:
     print('FAIL (%d)' % len(errors))

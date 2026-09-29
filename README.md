@@ -1,42 +1,53 @@
-# Abaqus Automation — Claude Code Skill
+# Abaqus Automation — Agent Kit
 
-A [Claude Code](https://claude.ai/code) skill that makes the AI assistant
+An agent-neutral instruction kit that makes AI coding agents (Codex,
+Cursor, GitHub Copilot, Gemini CLI, Claude Code, or your own agent)
 fluent in Abaqus/CAE Python scripting. It bundles a categorized,
 idempotent function library (`abqlib`), 36 documented API gotchas,
 29 reusable workflow patterns, a script template, and a read-only
-model inspector — distilled from production finite-element
-analysis work.
+model inspector — distilled from production finite-element analysis
+work.
 
 ## Who This Is For
 
-Engineers who use **Abaqus/CAE** and want Claude Code to write correct
+Engineers who use **Abaqus/CAE** and want an AI agent to write correct
 noGUI scripts on the first try — without the usual API guesswork that
 leads to silent errors (zero loads, flipped pressure, stale regions,
 orphan RPs, wrong coupling types).
 
 ## Prerequisites
 
-- [Claude Code](https://claude.ai/code) (CLI, desktop app, or IDE extension)
-- Abaqus/CAE with a valid license (2024 or 2025 tested)
+- An AI agent that can read files and (ideally) run shell commands
+- Abaqus/CAE with a valid license (2024 or 2025 tested; abqlib also
+  targets the Python 2.7 of 2023 and older)
 
 ## Installation
 
-Copy (or symlink) this folder into your Claude Code skills directory:
+Put this folder somewhere stable, e.g. `D:\tools\abaqus-automation`
+(clone or copy). Everything the agent needs starts at **`AGENTS.md`**;
+all paths inside it are relative to this folder. Then connect your agent:
 
-```
-~/.claude/skills/abaqus-automation/
-```
+| Agent | How |
+|-------|-----|
+| Any agent that reads `AGENTS.md` (Codex, Cursor, Copilot coding agent, …) | Add one line to your **project's** `AGENTS.md`: `For Abaqus/CAE work, read D:\tools\abaqus-automation\AGENTS.md and follow it.` |
+| Agents with their own instructions file (Gemini CLI `GEMINI.md`, Copilot `.github/copilot-instructions.md`, Cursor rules, …) | Put the same line in that file. |
+| Agents that support Agent Skills folders (`SKILL.md` with frontmatter, e.g. Claude Code) | Copy or symlink the folder into the agent's skills directory. `SKILL.md` only points to `AGENTS.md`. |
+| Your own agent (SDK / API) | Load `AGENTS.md` into the system prompt (or give the agent a file-read tool and tell it to read it), plus a shell tool for `abaqus` commands. |
 
-Claude Code automatically discovers skills in this directory. Once
-installed, the skill activates whenever you mention Abaqus, `.cae`,
-`.odb`, noGUI scripts, or any Abaqus API class in your prompt.
+Then set `ABQLIB_PATH` in `scripts/script_template.py` to
+`<kit folder>\scripts` so generated scripts can import `abqlib`.
+
+No shell access or no Abaqus on the agent's machine? The agent still
+writes the script and hands you the exact command to run; paste back
+the report file it produces.
 
 ## What's Included
 
 ```
 abaqus-automation/
-├── SKILL.md                        # Main skill definition (Claude reads this)
-├── CLAUDE.md                       # Maintenance guide for updating the skill
+├── AGENTS.md                       # Main instructions (all agents read this)
+├── SKILL.md                        # Frontmatter shim for skill-aware agents -> AGENTS.md
+├── CLAUDE.md                       # Shim -> AGENTS.md
 ├── README.md                       # This file
 ├── .gitignore
 ├── references/
@@ -47,10 +58,10 @@ abaqus-automation/
 │   └── projects.md                 # Per-project profiles (customize this)
 ├── scripts/
 │   ├── abqlib/                     # Categorized function library (import it)
-│   ├── skill_template.py           # Boilerplate for new noGUI scripts
+│   ├── script_template.py          # Boilerplate for new noGUI scripts
 │   └── inspect_model.py            # Read-only CAE model inspector
 ├── tools/
-│   ├── check_skill.py              # Consistency checks (plain Python 3)
+│   ├── check_consistency.py        # Consistency checks (plain Python 3)
 │   └── gen_catalog.py              # Regenerates references/api_catalog.md
 └── tests/                          # abqlib unit tests on fake Abaqus objects
 ```
@@ -59,7 +70,7 @@ abaqus-automation/
 
 ### Categorized Function Library (`abqlib`)
 
-Claude routes each request to a category and composes library calls
+The agent routes each request to a category and composes library calls
 instead of writing raw API code every time:
 
 | Module | Covers |
@@ -90,7 +101,7 @@ mass.ensure_point_mass(asm, 'Fin_Mass', fin_keys, total_mass=0.0686)
 ### API Gotchas (36 documented traps)
 
 The Abaqus Python API has many traps that don't raise errors — they
-silently produce wrong results. This skill catalogs them so Claude
+silently produce wrong results. This kit catalogs them so the agent
 avoids them automatically:
 
 - `inst.nodes[5]` is the 6th node, not label 5
@@ -122,7 +133,7 @@ Each pattern is distilled from real production scripts with code snippets:
 
 ### Collaboration Workflow
 
-The skill enforces a safe, semi-automated workflow:
+The kit enforces a safe, semi-automated workflow:
 
 1. **Inspect** — read-only probe to confirm current model state
 2. **Write** — produce an idempotent script with tunable "User inputs" block
@@ -148,19 +159,19 @@ abaqus cae noGUI=inspect_model.py -- path/to/model.cae ModelName
 abaqus cae noGUI=inspect_model.py -- path/to/model.cae - out/_before.txt   # all models, custom path
 ```
 
-**`scripts/skill_template.py`** — Copy this when creating a new noGUI
+**`scripts/script_template.py`** — Copy this when creating a new noGUI
 script. Includes encoding header, standard imports, "User inputs" block,
 report-file logging, `find_existing_rp` / `backup_cae` helpers, idempotent
 patterns, and a try/except main that writes the traceback and never saves
 a half-modified CAE.
 
-### Maintaining the skill
+### Maintaining the kit
 
 Before committing:
 
 ```bash
 python3 tools/gen_catalog.py              # after changing abqlib docstrings
-python3 tools/check_skill.py              # consistency + Py2.7 syntax + catalog freshness
+python3 tools/check_consistency.py        # consistency + Py2.7 syntax + catalog freshness
 python3 -m unittest discover -s tests     # abqlib logic on fake Abaqus objects
 ```
 
@@ -185,14 +196,14 @@ Edit `references/projects.md` to add a profile for your CAE:
 | Scripts | `scripts/` |
 ```
 
-The skill reads this file before touching any CAE, so Claude knows which
+The agent reads this file before touching any CAE, so it knows which
 launcher to use, what models exist, and what the instance is named.
 
 ### Adding New Patterns
 
 When you develop a new reusable workflow, add it to
-`references/patterns.md` with a code snippet. The skill will
-automatically reference it in future sessions.
+`references/patterns.md` with a code snippet. Agents will
+reference it in future sessions.
 
 ### Adding New Gotchas
 
@@ -201,7 +212,7 @@ When you discover a new API trap, add it to the gotcha table in
 
 ## Units
 
-The skill defaults to the **mm-tonne-N-s** unit system:
+The kit defaults to the **mm-tonne-N-s** unit system:
 
 | Quantity | Unit | Notes |
 |----------|------|-------|
