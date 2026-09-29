@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """abqlib - categorized, idempotent helpers for Abaqus/CAE noGUI scripts.
 
-Import from a noGUI script (``__file__`` is undefined there, so the skill
+Import from a noGUI script (``__file__`` is undefined there, so the kit
 path comes from the User inputs block):
 
     import sys
-    sys.path.insert(0, SKILL_SCRIPTS_DIR)   # .../abaqus-automation/scripts
+    sys.path.insert(0, ABQLIB_PATH)   # .../abaqus-automation/scripts
     from abqlib import session, rp, sets, constraints, loads, bcs, mass
 
 Every ``ensure_*`` function is idempotent: it deletes an existing object of

@@ -5,7 +5,7 @@ Scripting Reference Guide v6.6–2017, abqpy docs, project field experience.
 
 ## API Gotchas
 
-The first 10 are the everyday ones (mirrored in `SKILL.md`); 11+ are
+The first 10 are the everyday ones (mirrored in `AGENTS.md`); 11+ are
 import/round-trip, noGUI-runtime, and ODB traps.
 
 | # | Gotcha | Why it bites | Fix |
@@ -140,7 +140,7 @@ assembly.Set(name='FinCP_2_Set',
 ### Find an existing RP within tolerance (avoid duplicates)
 
 Copy `find_existing_rp(assembly, x, y, z, tolerance)` from
-`scripts/skill_template.py` — it returns the key of the *nearest* live RP
+`scripts/script_template.py` — it returns the key of the *nearest* live RP
 within tolerance (skipping datum points and orphan features), or `None`.
 Don't re-implement it per script.
 

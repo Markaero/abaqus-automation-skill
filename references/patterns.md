@@ -6,7 +6,7 @@ don't reinvent it.
 
 **About the `Reference:` lines:** they name the script in the origin
 project where the pattern was proven. They are provenance, not files
-shipped with this skill. If the user's project has a script of that name,
+shipped with this kit. If the user's project has a script of that name,
 reuse it; otherwise implement from the snippet here.
 
 ## 1. Model creation / copy / rename
@@ -39,13 +39,13 @@ bucket by angle, build new sets via `instance.elements.sequenceFromLabels(...)`.
 
 ## 3. Reference points: create / find / dedupe
 
-**Reference:** `scripts/skill_template.py::find_existing_rp`, `cleanup_dup_rps.py`,
+**Reference:** `scripts/script_template.py::find_existing_rp`, `cleanup_dup_rps.py`,
 `inspect_rps.py`
 
 Always check before creating:
 
 ```python
-# helper: copy from scripts/skill_template.py
+# helper: copy from scripts/script_template.py
 existing_key = find_existing_rp(assembly, x, y, z, tolerance=10.0)
 if existing_key is not None:
     rp_key = existing_key
@@ -178,7 +178,7 @@ before resubmitting. Save the per-model results dict to
 `extract_ir.py`, `inspect_eq_sets.py`. Plus `scripts/inspect/inspect_cae.py`
 and `scripts/inspect/inspect_sa.py` for additional model-tree dumps.
 
-Use the bundled `scripts/inspect_model.py` (in this skill) as the single
+Use the bundled `scripts/inspect_model.py` (in this kit) as the single
 entry point for "what's in this CAE?" — it covers steps, parts, sets,
 surfaces, RPs (with duplicate detection), constraints, loads, masses,
 and totals.

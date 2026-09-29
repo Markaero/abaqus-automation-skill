@@ -1,7 +1,7 @@
 # Project Conventions
 
 The conventions you must follow when writing Abaqus automation scripts
-for projects managed by this skill.
+for projects managed by this kit.
 
 ## Units (mm-N-tonne-s)
 
@@ -94,7 +94,7 @@ For `abaqus` invocations:
 
 - **Don't use a bare PowerShell `2>&1`** — the license-checkout banner goes
   to stderr, gets wrapped, and ends up clobbering stdout in the file. The
-  `> _script.log 2>&1` form used elsewhere in this skill is for cmd/bash;
+  `> _script.log 2>&1` form used elsewhere in this kit is for cmd/bash;
   from PowerShell run it through cmd:
   `cmd /c "abaqus cae noGUI=script.py > _script.log 2>&1"`, or just
   `abaqus cae noGUI=script.py | Out-Null`.
@@ -230,12 +230,12 @@ print('Done.')
 ## Configuration & constants
 
 Everything that has a magic value lives in the script's top "User
-inputs" block (see `scripts/skill_template.py`), with a comment noting
+inputs" block (see `scripts/script_template.py`), with a comment noting
 the source (Excel cell, drawing, spec, calculation). Project facts
 (CAE path, model names) are looked up in `references/projects.md` —
 there is no shared config module. The `find_existing_rp(...)` helper
-lives in `scripts/skill_template.py` — copy it into new scripts
-(`# helper: copy from scripts/skill_template.py`) rather than
+lives in `scripts/script_template.py` — copy it into new scripts
+(`# helper: copy from scripts/script_template.py`) rather than
 re-implementing.
 
 ## Reports
@@ -246,8 +246,7 @@ the headline numbers (`aero_job_report.json`, `diag_moments.json`,
 script's stdout. Keep the JSON shape stable — break-safe key names,
 floats not numpy types.
 
-## Claude Code integration
+## Agent integration
 
-If you use [Claude Code](https://claude.ai/code) with this skill,
-configure allowed tools in your `.claude/settings.json` as needed.
-No automated hooks are required.
+Any agent that can read files and run shell commands can use this kit;
+per-agent setup is in the README. No hooks or special tools are required.

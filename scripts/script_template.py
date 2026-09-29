@@ -25,7 +25,7 @@ import traceback
 # ----------------------------------------------------------------------
 # User inputs, unit = mm, N, tonne  (edit this block only)
 # ----------------------------------------------------------------------
-SKILL_SCRIPTS_DIR = r'C:\Users\me\.claude\skills\abaqus-automation\scripts'  # __file__ is undefined in noGUI
+ABQLIB_PATH = r'D:\tools\abaqus-automation\scripts'  # kit's scripts/ dir (holds abqlib); __file__ is undefined in noGUI
 CAE_PATH    = r'D:\path\to\model.cae'        # which CAE (mind the Abaqus version!)
 MODEL_NAME  = 'Model-1'
 REPORT_PATH = r'D:\path\to\_this_script.txt'  # NOT the shell-redirect .log
@@ -38,7 +38,7 @@ RP_TOLERANCE  = 10.0                # mm, RP coordinate match tolerance
 # ----------------------------------------------------------------------
 # Library
 # ----------------------------------------------------------------------
-sys.path.insert(0, SKILL_SCRIPTS_DIR)
+sys.path.insert(0, ABQLIB_PATH)
 from abqlib import session, rp, loads
 from abqlib.util import Report, log
 
