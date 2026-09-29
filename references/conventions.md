@@ -121,7 +121,7 @@ session. The lock is per-file, not per-process. Before running any
 script that calls `openMdb` + `mdb.save()`, ask the user (or close
 your own session) so the file is releasable. After the script runs, tell
 the user to reopen the `.cae` (`File → Close`, then open) — an already
-open GUI keeps showing its stale snapshot (API gotcha #22).
+open GUI keeps showing its stale snapshot (API trap #7).
 
 ## Reporting from inside Abaqus scripts
 

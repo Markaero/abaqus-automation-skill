@@ -6,7 +6,12 @@ path comes from the User inputs block):
 
     import sys
     sys.path.insert(0, ABQLIB_PATH)   # .../abaqus-automation/scripts
-    from abqlib import session, rp, sets, constraints, loads, bcs, mass
+    from abqlib import cae, rp, sets, constraints, loads, bcs, mass
+
+Module names avoid Abaqus globals: ``cae`` (not ``session``, which is the
+Abaqus session object), ``jobs`` (``job`` is an Abaqus module pulled in by
+``from caeModules import *``) and ``results`` (``odb`` is the usual name of
+an opened ODB).
 
 Every ``ensure_*`` function is idempotent: it deletes an existing object of
 the same name and recreates it, so re-running a script gives the same model.

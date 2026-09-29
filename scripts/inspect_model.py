@@ -66,7 +66,7 @@ def _safe_len(container):
 
 
 def _safe_attr(obj, name, default=None):
-    """getattr that also swallows non-AttributeError failures (gotcha #29)."""
+    """getattr that also swallows the non-AttributeError failures some Abaqus attributes raise."""
     try:
         return getattr(obj, name, default)
     except Exception:
@@ -316,7 +316,7 @@ def report_loads(model, snap):
             name, cls, region_name, '  [SUPPRESSED]' if suppressed else ''))
         lsnap = {'type': cls, 'region': region_name, 'suppressed': suppressed,
                  'follower': follower, 'steps': {}}
-        # loadStates is the source of truth for values (gotcha #25);
+        # Values live on loadStates (loads have no cf1/magnitude members);
         # the load object's own attributes can be None after .inp re-import.
         for sname in step_names:
             try:
@@ -340,64 +340,69 @@ def report_loads(model, snap):
         snap['loads'][name] = lsnap
 
 
-def report_point_inertias(assembly, snap):
-    eng = _safe_attr(assembly, 'engineeringFeatures', None)
-    inertias = _safe_attr(eng, 'inertias', None) if eng is not None else None
-    n = _safe_len(inertias) if inertias is not None else 0
-    _print_header('Point Inertias (%d)' % n)
-    snap['point_inertias'] = {}
-    if n == 0:
-        out('  (none)')
-        return 0.0
-    total = 0.0
-    for name in inertias.keys():
-        it = inertias[name]
-        mass = _as_float(_safe_attr(it, 'mass', None))
-        region_name = _region_name(_safe_attr(it, 'region', None))
-        if mass is None:
-            out('  %-30s mass=<none>     region=%s' % (name, region_name))
-        else:
-            total += mass
-            out('  %-30s mass=%-12.6g region=%s  (per RP - gotcha: not total)' % (
-                name, mass, region_name))
-        snap['point_inertias'][name] = {'mass_per_point': mass, 'region': region_name}
-    out('  -- sum of per-point masses (x N RPs not applied): %.6g' % total)
-    return total
-
-
-def report_nsm(model, snap):
-    total = 0.0
-    lines = []
-    snap['nonstructural_masses'] = {}
+def _inertia_owners(model):
+    """(label, engineeringFeatures) for the assembly and every part."""
+    owners = [('assembly', _safe_attr(model.rootAssembly, 'engineeringFeatures', None))]
     for pname in model.parts.keys():
-        eng = _safe_attr(model.parts[pname], 'engineeringFeatures', None)
-        nsm = _safe_attr(eng, 'nonstructuralMasses', None)
-        if nsm is None:
-            continue
+        owners.append(('part=%s' % pname,
+                       _safe_attr(model.parts[pname], 'engineeringFeatures', None)))
+    return owners
+
+
+def report_inertias(model, snap):
+    """Point masses, non-structural masses and other inertias.
+
+    All of them live in engineeringFeatures.inertias (on the assembly and on
+    each part); there is no separate NSM repository.
+    """
+    lines = []
+    point_total = 0.0
+    nsm_total = 0.0
+    snap['inertias'] = {}
+    for owner, eng in _inertia_owners(model):
+        repo = _safe_attr(eng, 'inertias', None) if eng is not None else None
         try:
-            keys = list(nsm.keys())
+            names = list(repo.keys())
         except Exception:
             continue
-        for nname in keys:
-            entry = nsm[nname]
-            mag = _as_float(_safe_attr(entry, 'magnitude', None))
-            units = _sym(_safe_attr(entry, 'units', None)) or ''
-            dist = _sym(_safe_attr(entry, 'distribution', None)) or ''
-            if mag is not None and units == 'TOTAL_MASS':
-                total += mag
-            lines.append('  part=%-20s name=%-25s mag=%-12s units=%-15s dist=%s' % (
-                pname, nname, ('%.6g' % mag) if mag is not None else '<none>',
-                units, dist))
-            snap['nonstructural_masses']['%s/%s' % (pname, nname)] = {
-                'magnitude': mag, 'units': units, 'distribution': dist}
-    _print_header('Non-Structural Masses (%d)' % len(lines))
+        for name in names:
+            it = repo[name]
+            cls = _class_name(it)
+            region_name = _region_name(_safe_attr(it, 'region', None))
+            entry = {'owner': owner, 'type': cls, 'region': region_name,
+                     'suppressed': bool(_safe_attr(it, 'suppressed', False))}
+            if cls == 'PointMassInertia':
+                mass = _as_float(_safe_attr(it, 'mass', None))
+                entry['mass_per_point'] = mass
+                if mass is not None:
+                    point_total += mass
+                lines.append('  %-16s %-25s PointMass mass=%s per point  region=%s' % (
+                    owner, name, ('%.6g' % mass) if mass is not None else '<aniso/none>',
+                    region_name))
+            elif cls == 'NonstructuralMass':
+                mag = _as_float(_safe_attr(it, 'magnitude', None))
+                units = _sym(_safe_attr(it, 'units', None)) or ''
+                dist = _sym(_safe_attr(it, 'distribution', None)) or ''
+                entry.update({'magnitude': mag, 'units': units, 'distribution': dist})
+                if mag is not None and units == 'TOTAL_MASS':
+                    nsm_total += mag
+                lines.append('  %-16s %-25s NSM mag=%s units=%s dist=%s region=%s' % (
+                    owner, name, ('%.6g' % mag) if mag is not None else '<none>',
+                    units, dist, region_name))
+            else:
+                lines.append('  %-16s %-25s %s region=%s' % (owner, name, cls, region_name))
+            if entry['suppressed']:
+                lines[-1] += '  [SUPPRESSED]'
+            snap['inertias']['%s/%s' % (owner, name)] = entry
+    _print_header('Inertias: point masses, NSM, other (%d)' % len(lines))
     if not lines:
         out('  (none)')
-        return 0.0
     for line in lines:
         out(line)
-    out('  -- NSM total (TOTAL_MASS entries only): %.6g' % total)
-    return total
+    if lines:
+        out('  -- point masses: sum of per-point values (x number of points not applied): %.6g' % point_total)
+        out('  -- NSM: sum of TOTAL_MASS entries: %.6g' % nsm_total)
+    return point_total, nsm_total
 
 
 def report_mass_summary(point_inertia_total, nsm_total, snap):
@@ -428,14 +433,13 @@ def inspect_model(model):
     report_reference_points(assembly, snap)
     report_constraints(model, snap)
     report_loads(model, snap)
-    pi_total = report_point_inertias(assembly, snap)
-    nsm_total = report_nsm(model, snap)
+    pi_total, nsm_total = report_inertias(model, snap)
     report_mass_summary(pi_total, nsm_total, snap)
     return snap
 
 
 def _parse_args():
-    """Args after '--' (gotcha #18: Abaqus may inject its own flags before it)."""
+    """Args after '--' (API trap #2: Abaqus may inject its own flags before it)."""
     if '--' in sys.argv:
         args = sys.argv[sys.argv.index('--') + 1:]
     else:
@@ -476,7 +480,7 @@ def main():
         openMdb(pathName=cae_path)
     except Exception as exc:
         out('  ERROR: failed to open CAE: %s' % exc)
-        out('  (Is the .cae open in the CAE GUI? Close it first - gotcha #21.)')
+        out('  (Is the .cae open in the CAE GUI? Close it first - API trap #6.)')
         snapshot['error'] = str(exc)
         _write_outputs(report_path, snapshot)
         sys.exit(1)

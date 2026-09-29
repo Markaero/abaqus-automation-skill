@@ -4,7 +4,7 @@
     python3 tools/check_consistency.py
 
 Catches the drift that bit earlier versions: the kit contradicting its
-own gotchas in scripts and code snippets.
+own API traps in scripts and code snippets.
 """
 
 import os
@@ -34,7 +34,7 @@ def script_files():
     return sorted(out)
 
 
-# 1. Scripts (incl. abqlib) compile and use a utf-8 header (gotcha #35)
+# 1. Scripts (incl. abqlib) compile and use a utf-8 header (API trap #4)
 for rel in script_files():
     try:
         py_compile.compile(os.path.join(ROOT, rel), doraise=True)
@@ -43,7 +43,7 @@ for rel in script_files():
     if not read(rel).startswith('# -*- coding: utf-8 -*-'):
         errors.append('%s: first line must be "# -*- coding: utf-8 -*-"' % rel)
 
-# 2. Code (scripts + python snippets) must follow the kit's own gotchas
+# 2. Code (scripts + python snippets) must follow the kit's own API traps
 code_sources = [(rel, read(rel)) for rel in script_files()]
 md_files = ['AGENTS.md', 'SKILL.md'] + [os.path.join('references', n)
                            for n in sorted(os.listdir(os.path.join(ROOT, 'references')))
@@ -54,17 +54,34 @@ for rel in md_files:
 
 for rel, code in code_sources:
     if re.search(r'coding:\s*mbcs', code):
-        errors.append('%s: uses mbcs coding header (gotcha #35)' % rel)
+        errors.append('%s: uses mbcs coding header (API trap #4)' % rel)
     for m in re.finditer(r'\bsum\((?!\[)[^\n]*\bfor\b', code):
-        errors.append('%s: sum() over a generator (gotcha #16): %s' % (rel, m.group(0)))
+        errors.append('%s: sum() over a generator (API trap #5): %s' % (rel, m.group(0)))
     if re.search(r'__file__', code) and 'noGUI' not in code:
-        errors.append('%s: uses __file__ (undefined under noGUI, gotcha #32)' % rel)
+        errors.append('%s: uses __file__ (undefined under noGUI, API trap #3)' % rel)
 
-# 3. Gotcha table numbered 1..N in order
+# 3. Trap table numbered 1..N; every "trap #N" / "§N" reference resolves
 api = read(os.path.join('references', 'abaqus_api.md'))
 nums = [int(n) for n in re.findall(r'^\| (\d+) \| \*\*', api, re.M)]
 if nums != list(range(1, len(nums) + 1)):
-    errors.append('references/abaqus_api.md: gotcha rows not numbered 1..N in order: %s' % nums)
+    errors.append('references/abaqus_api.md: trap rows not numbered 1..N in order: %s' % nums)
+patterns = read(os.path.join('references', 'patterns.md'))
+n_patterns = len(re.findall(r'^## \d+\.', patterns, re.M))
+ref_files = script_files() + md_files + ['README.md'] + [
+    os.path.join('tools', n) for n in os.listdir(os.path.join(ROOT, 'tools')) if n.endswith('.py')]
+for rel in ref_files:
+    text = read(rel)
+    if re.search(r'gotchas? #\d', text):
+        errors.append('%s: old-style "gotcha #N" reference; use "API trap #N"' % rel)
+    for m in re.finditer(r'traps? ((?:#\d+[/, ]*)+)', text):
+        for n in re.findall(r'#(\d+)', m.group(1)):
+            if not 1 <= int(n) <= len(nums):
+                errors.append('%s: reference to missing API trap #%s' % (rel, n))
+    for m in re.finditer(r'§(\d+)', text):
+        if not rel.endswith('patterns.md') and 'patterns' not in text[max(0, m.start() - 40):m.start()]:
+            continue
+        if not 1 <= int(m.group(1)) <= n_patterns:
+            errors.append('%s: reference to missing patterns §%s' % (rel, m.group(1)))
 
 # 4. abqlib stays Py 2.7 compatible (Abaqus <=2023)
 for rel in script_files():
@@ -99,5 +116,5 @@ if errors:
     for e in errors:
         print('  - ' + e)
     sys.exit(1)
-print('OK: %d scripts, %d markdown files checked, %d gotchas'
-      % (len([s for s in code_sources if s[0].endswith('.py')]), len(md_files), len(nums)))
+print('OK: %d scripts, %d markdown files checked, %d API traps, %d patterns'
+      % (len([s for s in code_sources if s[0].endswith('.py')]), len(md_files), len(nums), n_patterns))

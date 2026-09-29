@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Masses: point masses at RPs (total auto-split), non-structural mass on part sets."""
+"""Masses: point masses at RPs (total auto-split), non-structural mass on sets.
+
+Both kinds live in the same repository, engineeringFeatures.inertias
+(there is no separate NSM repository), so names must be unique across them.
+"""
 
 from abaqusConstants import TOTAL_MASS, MASS_PROPORTIONAL
 
@@ -8,7 +12,7 @@ from abqlib.rp import rp_region
 
 
 def ensure_point_mass(assembly, name, rp_keys, total_mass):
-    """PointMassInertia of total_mass (tonne) spread equally over rp_keys - pre-divides per RP (gotcha #9)."""
+    """PointMassInertia of total_mass (tonne) spread equally over rp_keys - the API applies mass to EACH point, so this pre-divides."""
     if not isinstance(rp_keys, (list, tuple)):
         rp_keys = [rp_keys]
     inertias = assembly.engineeringFeatures.inertias
@@ -24,14 +28,14 @@ def ensure_point_mass(assembly, name, rp_keys, total_mass):
     return obj
 
 
-def ensure_nsm(part, name, set_name, total_mass, distribution=MASS_PROPORTIONAL):
-    """Non-structural TOTAL_MASS (tonne) on a part-level set, distributed MASS_PROPORTIONAL by default."""
-    nsms = part.engineeringFeatures.nonstructuralMasses
-    existed = has_key(nsms, name)
+def ensure_nsm(owner, name, set_name, total_mass, distribution=MASS_PROPORTIONAL):
+    """Non-structural TOTAL_MASS (tonne) on a set of a part or the assembly (owner), MASS_PROPORTIONAL by default."""
+    inertias = owner.engineeringFeatures.inertias
+    existed = has_key(inertias, name)
     if existed:
-        del nsms[name]
-    obj = part.engineeringFeatures.NonstructuralMass(
-        name=name, region=part.sets[set_name], units=TOTAL_MASS,
+        del inertias[name]
+    obj = owner.engineeringFeatures.NonstructuralMass(
+        name=name, region=owner.sets[set_name], units=TOTAL_MASS,
         magnitude=float(total_mass), distribution=distribution)
     log('  NSM %s %g t on %s %s' % (name, total_mass, set_name, status(existed)))
     return obj

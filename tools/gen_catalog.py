@@ -17,8 +17,8 @@ PKG = os.path.join(ROOT, 'scripts', 'abqlib')
 OUT = os.path.join(ROOT, 'references', 'api_catalog.md')
 
 # Display order = typical build order of a script.
-ORDER = ['session', 'sets', 'rp', 'constraints', 'bcs', 'loads', 'mass',
-         'steps', 'job', 'odb', 'cleanup', 'util']
+ORDER = ['cae', 'sets', 'rp', 'constraints', 'bcs', 'loads', 'mass',
+         'steps', 'jobs', 'results', 'cleanup', 'util']
 
 HEADER = """# abqlib API Catalog
 
@@ -31,7 +31,7 @@ Pick functions from this catalog and compose them into a noGUI script
 ```python
 import sys
 sys.path.insert(0, ABQLIB_PATH)            # from the User inputs block
-from abqlib import session, sets, rp, constraints, bcs, loads, mass, steps, job, odb, cleanup
+from abqlib import cae, sets, rp, constraints, bcs, loads, mass, steps, jobs, results, cleanup
 from abqlib.util import Report, get_last_step
 ```
 

@@ -18,7 +18,7 @@ def _rp_features(assembly):
 
 
 def find_rp(assembly, xyz, tol=10.0):
-    """Key of the nearest live RP within tol of xyz, else None. Never trust stored ids (gotcha #10)."""
+    """Key of the nearest live RP within tol of xyz, else None. Look RPs up by coordinate: ids can change after a model copy."""
     best, best_d = None, None
     for _, fid, p in _rp_features(assembly):
         d = dist(p, xyz)
@@ -31,7 +31,7 @@ def ensure_rp(assembly, xyz, tol=10.0, set_name=None):
     """Reuse the RP near xyz or create one; optionally (re)build a named set on it. Returns the RP key."""
     key = find_rp(assembly, xyz, tol)
     if key is None:
-        key = assembly.ReferencePoint(point=tuple(xyz)).id   # returns a Feature (gotcha #4)
+        key = assembly.ReferencePoint(point=tuple(xyz)).id   # returns a Feature; .id keys referencePoints
         log('  RP created at %s (id=%d)' % (tuple(xyz), key))
     else:
         log('  RP reused at %s (id=%d)' % (tuple(xyz), key))
@@ -43,7 +43,7 @@ def ensure_rp(assembly, xyz, tol=10.0, set_name=None):
 
 
 def rp_region(assembly, keys):
-    """regionToolset.Region over one or more RP keys (handles the 1-tuple comma, gotcha #5)."""
+    """regionToolset.Region over one RP key or a list of keys."""
     if not isinstance(keys, (list, tuple)):
         keys = [keys]
     return regionToolset.Region(
@@ -68,7 +68,7 @@ def find_duplicate_rps(assembly, tol=10.0):
 
 
 def delete_rps_near(assembly, points, tol=10.0):
-    """Delete RP features near any of points. Delete loads/constraints/sets using them FIRST (gotcha #8)."""
+    """Delete RP features near any of points. Delete loads/constraints/sets using them first (see cleanup.delete_in_order)."""
     names = []
     for fname, _, p in _rp_features(assembly):
         for q in points:

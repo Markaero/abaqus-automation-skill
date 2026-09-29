@@ -3,10 +3,10 @@
 An agent-neutral instruction kit that makes AI coding agents (Codex,
 Cursor, GitHub Copilot, Gemini CLI, Claude Code, or your own agent)
 fluent in Abaqus/CAE Python scripting. It bundles a categorized,
-idempotent function library (`abqlib`), 36 documented API gotchas,
-29 reusable workflow patterns, a script template, and a read-only
-model inspector — distilled from production finite-element analysis
-work.
+idempotent function library (`abqlib`), an offline API lookup tool, the
+short list of traps the Abaqus docs don't mention, a script template,
+and a read-only model inspector — distilled from production
+finite-element analysis work.
 
 ## Who This Is For
 
@@ -20,6 +20,13 @@ orphan RPs, wrong coupling types).
 - An AI agent that can read files and (ideally) run shell commands
 - Abaqus/CAE with a valid license (2024 or 2025 tested; abqlib also
   targets the Python 2.7 of 2023 and older)
+
+## Two Ways to Use It
+
+- **Instruction kit** (below): the agent reads `AGENTS.md` and writes
+  noGUI scripts. Works with any agent.
+- **MCP server** (`mcp_server/`, in progress): the agent gets Abaqus
+  tools it can call directly. See [`mcp_server/README.md`](mcp_server/README.md).
 
 ## Installation
 
@@ -52,15 +59,17 @@ abaqus-automation/
 ├── .gitignore
 ├── references/
 │   ├── api_catalog.md              # abqlib functions by category (generated)
-│   ├── abaqus_api.md               # 36 API gotchas + cookbook snippets
-│   ├── patterns.md                 # 29 reusable workflow patterns
+│   ├── abaqus_api.md               # How to look up the API + traps the docs don't mention
+│   ├── patterns.md                 # Multi-step workflows abqlib doesn't cover
 │   ├── conventions.md              # Project conventions (units, layout, style)
 │   └── projects.md                 # Per-project profiles (customize this)
 ├── scripts/
 │   ├── abqlib/                     # Categorized function library (import it)
 │   ├── script_template.py          # Boilerplate for new noGUI scripts
 │   └── inspect_model.py            # Read-only CAE model inspector
+├── mcp_server/                     # MCP server: Abaqus tools for MCP clients
 ├── tools/
+│   ├── api_lookup.py               # Offline Abaqus API lookup (abqpy stubs)
 │   ├── check_consistency.py        # Consistency checks (plain Python 3)
 │   └── gen_catalog.py              # Regenerates references/api_catalog.md
 └── tests/                          # abqlib unit tests on fake Abaqus objects
@@ -75,7 +84,7 @@ instead of writing raw API code every time:
 
 | Module | Covers |
 |--------|--------|
-| `session` | open / backup / save CAE, copy models |
+| `cae` | open / backup / save CAE, copy models |
 | `sets` | assembly sets, part→assembly promotion, surfaces, node sets by coordinate |
 | `rp` | find-or-create reference points by coordinate, duplicates |
 | `constraints` | DISTRIBUTING / KINEMATIC couplings, ties, equations, cylindrical csys |
@@ -83,8 +92,8 @@ instead of writing raw API code every time:
 | `loads` | force, moment, pressure, gravity, inertia relief, per-step values, suppress |
 | `mass` | point masses (total auto-split per RP), non-structural mass |
 | `steps` | static step, field / history outputs |
-| `job` | submit + wait, skip-if-done, success from `.sta`, write `.inp` |
-| `odb` | history values, IR summary (with g conversion), field max |
+| `jobs` | submit + wait, skip-if-done, success from `.sta`, write `.inp` |
+| `results` | ODB history values, IR summary (with g conversion), field max |
 | `cleanup` | delete in the order Abaqus requires |
 
 Every `ensure_*` is idempotent. Full signatures:
@@ -98,38 +107,24 @@ loads.ensure_cforce(model, 'Fin1_Load', asm.sets['Fin1_RP'], (120.0, 0.0, 850.0)
 mass.ensure_point_mass(asm, 'Fin_Mass', fin_keys, total_mass=0.0686)
 ```
 
-### API Gotchas (36 documented traps)
+### Look It Up, Don't Memorize It
 
-The Abaqus Python API has many traps that don't raise errors — they
-silently produce wrong results. This kit catalogs them so the agent
-avoids them automatically:
+Most Abaqus scripting mistakes are documented behavior nobody looked up:
+`ReferencePoint()` returns a Feature, arrays are indexed by position not
+label, load values live on `loadStates`, a point mass applies to *each*
+point. Instead of a long list of such "gotchas", the kit makes the agent
+look calls up in the official API docs, offline:
 
-- `inst.nodes[5]` is the 6th node, not label 5
-- `assembly.ReferencePoint(...)` returns a Feature, not an RP
-- Single-RP tuple needs trailing comma: `(rp,)` not `(rp)`
-- `side1Elements` vs `side2Elements` flips pressure sign silently
-- DISTRIBUTING (RBE3) vs KINEMATIC (RBE2) — different stiffness
-- `model.Equation` / `Coupling` / `Tie` need `from caeModules import *`
-- `PointMassInertia(mass=M)` writes M *per RP*, not total
-- ... and 29 more
+```bash
+pip install --no-deps --target .abqpy "abqpy==2024.*"   # once; match your Abaqus version
+python3 tools/api_lookup.py ConcentratedForce            # members, arguments, access path
+```
 
-### Workflow Patterns (29 battle-tested recipes)
-
-Each pattern is distilled from real production scripts with code snippets:
-
-- Model copy / rename / derive
-- Set & surface promotion (part → assembly)
-- Reference point create / find / dedupe
-- DISTRIBUTING vs KINEMATIC couplings
-- Concentrated forces, moments, pressure (uniform & mapped field)
-- Gravity, inertia relief, IR result extraction
-- Point masses & non-structural masses
-- Equation constraints (cylindrical pairing)
-- Job submission & ODB post-processing
-- Beam orientation (n2 inward on mixed-winding mesh)
-- Section force extraction along an axis
-- Calibration loops (density + force + trim)
-- And more...
+[abqpy](https://github.com/haiiliin/abqpy) (MIT) mirrors the Abaqus
+Scripting Reference as Python stubs, one release per Abaqus version.
+`references/abaqus_api.md` keeps only what the docs *don't* tell you —
+23 traps, grouped by when they matter: every noGUI run, models imported
+from `.inp`, beam orientation, and empirical findings.
 
 ### Collaboration Workflow
 
@@ -170,9 +165,10 @@ a half-modified CAE.
 Before committing:
 
 ```bash
+python3 tools/api_lookup.py <Name>        # verify any Abaqus call you add to abqlib
 python3 tools/gen_catalog.py              # after changing abqlib docstrings
-python3 tools/check_consistency.py        # consistency + Py2.7 syntax + catalog freshness
-python3 -m unittest discover -s tests     # abqlib logic on fake Abaqus objects
+python3 tools/check_consistency.py        # consistency, Py2.7 syntax, catalog, trap/§ references
+python3 -m unittest discover -s tests     # abqlib + inspector logic on fake Abaqus objects
 ```
 
 None of these need Abaqus. The tests check abqlib's logic, not that
@@ -201,13 +197,16 @@ launcher to use, what models exist, and what the instance is named.
 
 ### Adding New Patterns
 
-When you develop a new reusable workflow, add it to
-`references/patterns.md` with a code snippet. Agents will
-reference it in future sessions.
+When you develop a new reusable multi-step workflow that abqlib doesn't
+cover, add it to `references/patterns.md` with a code snippet; agents
+will find it there in future sessions. Single operations belong in
+`abqlib` instead.
 
-### Adding New Gotchas
+### Adding New Traps
 
-When you discover a new API trap, add it to the gotcha table in
+When something surprises you, check the docs first
+(`python3 tools/api_lookup.py <Name>`). Only if the docs don't state it,
+add it to the matching group of the trap table in
 `references/abaqus_api.md`.
 
 ## Units
