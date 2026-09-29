@@ -43,9 +43,11 @@ abaqus-automation/
 │   ├── patterns.md                 # 29 reusable workflow patterns
 │   ├── conventions.md              # Project conventions (units, layout, style)
 │   └── projects.md                 # Per-project profiles (customize this)
-└── scripts/
-    ├── skill_template.py           # Boilerplate for new noGUI scripts
-    └── inspect_model.py            # Read-only CAE model inspector
+├── scripts/
+│   ├── skill_template.py           # Boilerplate for new noGUI scripts
+│   └── inspect_model.py            # Read-only CAE model inspector
+└── tools/
+    └── check_skill.py              # Consistency checks (plain Python 3)
 ```
 
 ## Key Features
@@ -100,16 +102,28 @@ user confirmation first.
 
 **`scripts/inspect_model.py`** — Run against any `.cae` to get a
 structured report of steps, parts, sets, surfaces, reference points
-(with duplicate detection), constraints, loads, masses, and totals.
+(with duplicate detection), constraints, loads (per-step values from
+`loadStates`, suppressed flags), and masses. It writes a text report and
+a JSON snapshot; diff the snapshots from before and after a change to
+verify it.
 
 ```bash
 abaqus cae noGUI=inspect_model.py -- path/to/model.cae
 abaqus cae noGUI=inspect_model.py -- path/to/model.cae ModelName
+abaqus cae noGUI=inspect_model.py -- path/to/model.cae - out/_before.txt   # all models, custom path
 ```
 
 **`scripts/skill_template.py`** — Copy this when creating a new noGUI
 script. Includes encoding header, standard imports, "User inputs" block,
-`find_existing_rp` helper, and idempotent patterns.
+report-file logging, `find_existing_rp` / `backup_cae` helpers, idempotent
+patterns, and a try/except main that writes the traceback and never saves
+a half-modified CAE.
+
+### Maintaining the skill
+
+Run `python3 tools/check_skill.py` before committing. It needs no Abaqus
+and catches the skill contradicting its own gotchas (mbcs headers,
+`sum(generator)`, `__file__`, gotcha numbering).
 
 ## Customization
 

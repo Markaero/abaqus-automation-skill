@@ -1,38 +1,51 @@
-# -*- coding: mbcs -*-
-"""Abaqus CAE model inspection script.
+# -*- coding: utf-8 -*-
+"""Abaqus CAE model inspection script (read-only).
 
-Reusable read-only inspector for an Abaqus .cae database. Prints a structured
-report covering steps, parts, assembly instances/sets/surfaces, reference
-points (with orphan-feature and duplicate detection), constraints, loads,
-point inertias, non-structural masses, and an overall mass summary.
+Reports steps, parts, assembly instances/sets/surfaces, reference points
+(with duplicate detection), constraints, loads (with per-step values from
+loadStates), point inertias, non-structural masses, and a mass summary.
 
 Invocation:
-    abaqus cae noGUI=inspect_model.py -- <cae_path> [model_name]
+    abaqus cae noGUI=inspect_model.py -- <cae_path> [model_name] [report_path]
 
-Defaults:
-    cae_path   -> (required, pass as first argument after --)
-    model_name -> (none) iterate all models in the database
+Outputs (stdout is unreliable under noGUI/PowerShell, so always files):
+    <report_path>                 text report   (default: _inspect_<cae>.txt in cwd)
+    <report_path minus ext>.json  JSON snapshot (diff two snapshots to verify a change)
+
+Pass '-' as model_name to inspect all models while still giving a report_path.
 
 Notes:
-    * Designed for Abaqus Python 2.7. No f-strings; uses % formatting.
-    * Does NOT save the mdb (read-only inspection).
+    * Py 2.7 / Py 3 compatible: % formatting, no f-strings.
+    * Does NOT save the mdb.
 """
 
 from abaqus import *
 from abaqusConstants import *
 import sys
+import os
 import math
+import json
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_CAE = ''  # pass as: abaqus cae noGUI=inspect_model.py -- <your.cae>
 RP_DUP_TOL = 10.0  # mm; flag reference points closer than this as duplicates
 SEP_MAJOR = '#' * 60
 SEP_MINOR = '=' * 60
 SEP_SUB = '-' * 60
+
+LOAD_VALUE_ATTRS = ('cf1', 'cf2', 'cf3', 'cm1', 'cm2', 'cm3',
+                    'magnitude', 'comp1', 'comp2', 'comp3')
+
+_lines = []
+
+
+def out(msg=''):
+    """Collect report lines; flushed to file at the end (and echoed)."""
+    _lines.append(msg)
+    print(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -40,9 +53,9 @@ SEP_SUB = '-' * 60
 # ---------------------------------------------------------------------------
 
 def _print_header(title):
-    print(SEP_SUB)
-    print('  %s' % title)
-    print(SEP_SUB)
+    out(SEP_SUB)
+    out('  %s' % title)
+    out(SEP_SUB)
 
 
 def _safe_len(container):
@@ -52,6 +65,14 @@ def _safe_len(container):
         return 0
 
 
+def _safe_attr(obj, name, default=None):
+    """getattr that also swallows non-AttributeError failures (gotcha #29)."""
+    try:
+        return getattr(obj, name, default)
+    except Exception:
+        return default
+
+
 def _class_name(obj):
     try:
         return obj.__class__.__name__
@@ -59,322 +80,333 @@ def _class_name(obj):
         return '<unknown>'
 
 
+def _sym(value):
+    """Symbolic constant -> its name; other values -> str."""
+    if value is None:
+        return None
+    try:
+        return value.name
+    except Exception:
+        return str(value)
+
+
+def _as_float(value):
+    """Return float(value) or None for None / UNSET / symbolic constants."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def _fmt_xyz(x, y, z):
     return '(%9.2f, %9.2f, %9.2f)' % (x, y, z)
 
 
+def _region_name(region):
+    name = _safe_attr(region, 'name', None)
+    if name:
+        return name
+    try:
+        # load/constraint regions are often tuples: (set_name, 'Assembly', ...)
+        return str(tuple(region)[0])
+    except Exception:
+        pass
+    try:
+        return str(region)
+    except Exception:
+        return '<?>'
+
+
 # ---------------------------------------------------------------------------
-# Section reporters
+# Section reporters (each fills its slice of the JSON snapshot `snap`)
 # ---------------------------------------------------------------------------
 
-def report_steps(model):
+def report_steps(model, snap):
     steps = model.steps
     _print_header('Steps (%d)' % _safe_len(steps))
+    snap['steps'] = []
     if _safe_len(steps) == 0:
-        print('  (none)')
+        out('  (none)')
         return
+    names = list(steps.keys())
     last_analysis = None
-    for name in steps.keys():
-        step = steps[name]
-        cls = _class_name(step)
-        if cls != 'InitialStep':
+    for name in names:
+        if _class_name(steps[name]) != 'InitialStep':
             last_analysis = name
-    for name in steps.keys():
-        step = steps[name]
-        cls = _class_name(step)
+    for name in names:
+        cls = _class_name(steps[name])
         marker = '  <-- last analysis step' if name == last_analysis else ''
-        print('  %-20s (%s)%s' % (name, cls, marker))
+        out('  %-20s (%s)%s' % (name, cls, marker))
+        snap['steps'].append({'name': name, 'type': cls})
 
 
-def report_parts(model):
+def report_parts(model, snap):
     parts = model.parts
     _print_header('Parts (%d)' % _safe_len(parts))
+    snap['parts'] = {}
     if _safe_len(parts) == 0:
-        print('  (none)')
+        out('  (none)')
         return
     for name in parts.keys():
         part = parts[name]
-        n_elems = _safe_len(getattr(part, 'elements', ()))
-        n_nodes = _safe_len(getattr(part, 'nodes', ()))
-        print('  %-30s elems=%-7d nodes=%-7d' % (name, n_elems, n_nodes))
-        sets = getattr(part, 'sets', None)
+        n_elems = _safe_len(_safe_attr(part, 'elements', ()))
+        n_nodes = _safe_len(_safe_attr(part, 'nodes', ()))
+        out('  %-30s elems=%-7d nodes=%-7d' % (name, n_elems, n_nodes))
+        psnap = {'elements': n_elems, 'nodes': n_nodes, 'sets': {}}
+        sets = _safe_attr(part, 'sets', None)
         if sets and _safe_len(sets) > 0:
             for sname in sorted(sets.keys()):
                 s = sets[sname]
-                se = _safe_len(getattr(s, 'elements', ()))
-                sn = _safe_len(getattr(s, 'nodes', ()))
-                print('      set: %-30s elems=%-6d nodes=%-6d' % (sname, se, sn))
+                se = _safe_len(_safe_attr(s, 'elements', ()))
+                sn = _safe_len(_safe_attr(s, 'nodes', ()))
+                out('      set: %-30s elems=%-6d nodes=%-6d' % (sname, se, sn))
+                psnap['sets'][sname] = {'elements': se, 'nodes': sn}
+        snap['parts'][name] = psnap
 
 
-def report_instances(assembly):
+def report_instances(assembly, snap):
     instances = assembly.instances
     _print_header('Assembly Instances (%d)' % _safe_len(instances))
+    snap['instances'] = {}
     if _safe_len(instances) == 0:
-        print('  (none)')
+        out('  (none)')
         return
     for name in instances.keys():
         inst = instances[name]
-        part_name = getattr(getattr(inst, 'part', None), 'name', '<?>')
-        dep = getattr(inst, 'dependent', None)
+        # inst.part can raise on ModelFromInputFile + changeKey models
+        part_name = _safe_attr(_safe_attr(inst, 'part', None), 'name', '<?>')
+        dep = _safe_attr(inst, 'dependent', None)
         dep_str = 'dependent' if dep == ON else ('independent' if dep == OFF else '?')
-        print('  %-30s part=%-25s %s' % (name, part_name, dep_str))
+        out('  %-30s part=%-25s %s' % (name, part_name, dep_str))
+        snap['instances'][name] = {'part': part_name, 'dependent': dep_str}
 
 
-def report_assembly_sets(assembly):
+def report_assembly_sets(assembly, snap):
     sets = assembly.sets
     _print_header('Assembly Sets (%d)' % _safe_len(sets))
+    snap['assembly_sets'] = {}
     if _safe_len(sets) == 0:
-        print('  (none)')
+        out('  (none)')
         return
     for name in sorted(sets.keys()):
         s = sets[name]
-        se = _safe_len(getattr(s, 'elements', ()))
-        sn = _safe_len(getattr(s, 'nodes', ()))
-        rp = _safe_len(getattr(s, 'referencePoints', ()))
-        print('  %-35s elems=%-6d nodes=%-6d rp=%-3d' % (name, se, sn, rp))
+        se = _safe_len(_safe_attr(s, 'elements', ()))
+        sn = _safe_len(_safe_attr(s, 'nodes', ()))
+        rp = _safe_len(_safe_attr(s, 'referencePoints', ()))
+        out('  %-35s elems=%-6d nodes=%-6d rp=%-3d' % (name, se, sn, rp))
+        snap['assembly_sets'][name] = {'elements': se, 'nodes': sn,
+                                       'referencePoints': rp}
 
 
-def report_assembly_surfaces(assembly):
+def report_assembly_surfaces(assembly, snap):
     surfs = assembly.surfaces
     _print_header('Assembly Surfaces (%d)' % _safe_len(surfs))
+    snap['assembly_surfaces'] = {}
     if _safe_len(surfs) == 0:
-        print('  (none)')
+        out('  (none)')
         return
     for name in sorted(surfs.keys()):
-        s = surfs[name]
-        se = _safe_len(getattr(s, 'elements', ()))
-        print('  %-35s elems=%-6d' % (name, se))
+        se = _safe_len(_safe_attr(surfs[name], 'elements', ()))
+        out('  %-35s elems=%-6d' % (name, se))
+        snap['assembly_surfaces'][name] = {'elements': se}
 
 
-def report_reference_points(assembly):
+def report_reference_points(assembly, snap):
     feats = assembly.features
-    rp_feats = []
-    for fname in feats.keys():
-        if fname.startswith('RP-'):
-            rp_feats.append(fname)
+    rp_feats = [f for f in feats.keys() if f.startswith('RP-')]
     _print_header('Reference Points (%d)' % len(rp_feats))
+    snap['reference_points'] = []
+    snap['rp_duplicates'] = []
     if not rp_feats:
-        print('  (none)')
+        out('  (none)')
         return
 
-    rp_repo = getattr(assembly, 'referencePoints', {})
     repo_keys = set()
     try:
-        for k in rp_repo.keys():
+        for k in assembly.referencePoints.keys():
             repo_keys.add(int(k))
     except Exception:
         pass
 
-    coords = []  # list of (name, id, x, y, z)
+    coords = []  # (name, id, x, y, z)
     for fname in rp_feats:
         feat = feats[fname]
-        rp_id = getattr(feat, 'id', None)
-        x = getattr(feat, 'xValue', None)
-        y = getattr(feat, 'yValue', None)
-        z = getattr(feat, 'zValue', None)
-        in_repo = 'yes' if (rp_id is not None and int(rp_id) in repo_keys) else 'no'
+        rp_id = _safe_attr(feat, 'id', None)
+        x = _safe_attr(feat, 'xValue', None)
+        y = _safe_attr(feat, 'yValue', None)
+        z = _safe_attr(feat, 'zValue', None)
+        in_repo = rp_id is not None and int(rp_id) in repo_keys
+        entry = {'feature': fname, 'id': rp_id, 'in_repo': in_repo}
         if x is None or y is None or z is None:
-            print('  %-8s id=%-4s  (no xyz on feature)  [in repo: %s]' % (
-                fname, str(rp_id), in_repo))
+            out('  %-8s id=%-4s  (no xyz on feature)  [in repo: %s]' % (
+                fname, str(rp_id), 'yes' if in_repo else 'no'))
         else:
-            print('  %-8s id=%-4s  %s  [in repo: %s]' % (
-                fname, str(rp_id), _fmt_xyz(x, y, z), in_repo))
+            out('  %-8s id=%-4s  %s  [in repo: %s]' % (
+                fname, str(rp_id), _fmt_xyz(x, y, z), 'yes' if in_repo else 'no'))
             coords.append((fname, rp_id, x, y, z))
+            entry['xyz'] = [x, y, z]
+        snap['reference_points'].append(entry)
 
-    # Duplicate detection
-    flagged = False
     for i in range(len(coords)):
         for j in range(i + 1, len(coords)):
             n1, _, x1, y1, z1 = coords[i]
             n2, _, x2, y2, z2 = coords[j]
             d = math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2)
             if d < RP_DUP_TOL:
-                print('  WARNING: %s and %s within %.2fmm (d=%.3f) - duplicates?' % (
+                out('  WARNING: %s and %s within %.2fmm (d=%.3f) - duplicates?' % (
                     n1, n2, RP_DUP_TOL, d))
-                flagged = True
-    if not flagged:
-        print('  (no duplicate reference points within %.2fmm)' % RP_DUP_TOL)
+                snap['rp_duplicates'].append([n1, n2, d])
+    if not snap['rp_duplicates']:
+        out('  (no duplicate reference points within %.2fmm)' % RP_DUP_TOL)
 
 
-def report_constraints(model):
-    cons = getattr(model, 'constraints', {})
+def report_constraints(model, snap):
+    cons = _safe_attr(model, 'constraints', {})
     _print_header('Constraints (%d)' % _safe_len(cons))
+    snap['constraints'] = {}
     if _safe_len(cons) == 0:
-        print('  (none)')
+        out('  (none)')
         return
     for name in cons.keys():
         c = cons[name]
         cls = _class_name(c)
-        ctype = getattr(c, 'couplingType', None)
-        ctype_str = ''
-        if ctype is not None:
-            try:
-                ctype_str = '  type=%s' % ctype.name
-            except Exception:
-                ctype_str = '  type=%s' % str(ctype)
-        print('  %-30s %-15s%s' % (name, cls, ctype_str))
+        ctype = _sym(_safe_attr(c, 'couplingType', None))
+        suppressed = bool(_safe_attr(c, 'suppressed', False))
+        extra = ''
+        if ctype:
+            extra += '  type=%s' % ctype
+        if suppressed:
+            extra += '  [SUPPRESSED]'
+        out('  %-30s %-15s%s' % (name, cls, extra))
+        snap['constraints'][name] = {'type': cls, 'couplingType': ctype,
+                                     'suppressed': suppressed}
 
 
-def _fmt_load_magnitudes(load):
-    cls = _class_name(load)
-    parts = []
-    if cls == 'ConcentratedForce':
-        cf1 = getattr(load, 'cf1', None)
-        cf2 = getattr(load, 'cf2', None)
-        cf3 = getattr(load, 'cf3', None)
-        parts.append('cf=(%s, %s, %s)' % (
-            ('%.3f' % cf1) if cf1 is not None else '-',
-            ('%.3f' % cf2) if cf2 is not None else '-',
-            ('%.3f' % cf3) if cf3 is not None else '-'))
-    elif cls == 'Moment':
-        cm1 = getattr(load, 'cm1', None)
-        cm2 = getattr(load, 'cm2', None)
-        cm3 = getattr(load, 'cm3', None)
-        parts.append('cm=(%s, %s, %s)' % (
-            ('%.3f' % cm1) if cm1 is not None else '-',
-            ('%.3f' % cm2) if cm2 is not None else '-',
-            ('%.3f' % cm3) if cm3 is not None else '-'))
-    elif cls == 'Pressure':
-        mag = getattr(load, 'magnitude', None)
-        parts.append('mag=%s' % (('%.4f' % mag) if mag is not None else '-'))
-    elif cls == 'Gravity':
-        c1 = getattr(load, 'comp1', None)
-        c2 = getattr(load, 'comp2', None)
-        c3 = getattr(load, 'comp3', None)
-        parts.append('g=(%s, %s, %s)' % (
-            ('%.3f' % c1) if c1 is not None else '-',
-            ('%.3f' % c2) if c2 is not None else '-',
-            ('%.3f' % c3) if c3 is not None else '-'))
-    else:
-        mag = getattr(load, 'magnitude', None)
-        if mag is not None:
-            parts.append('mag=%.4f' % mag)
-    follower = getattr(load, 'follower', None)
-    if follower is not None:
-        try:
-            parts.append('follower=%s' % follower.name)
-        except Exception:
-            parts.append('follower=%s' % str(follower))
-    return '   '.join(parts)
+def _load_values(obj):
+    vals = {}
+    for attr in LOAD_VALUE_ATTRS:
+        v = _as_float(_safe_attr(obj, attr, None))
+        if v is not None:
+            vals[attr] = v
+    return vals
 
 
-def report_loads(model):
+def _fmt_vals(vals):
+    return ', '.join(['%s=%.6g' % (k, vals[k]) for k in LOAD_VALUE_ATTRS if k in vals])
+
+
+def report_loads(model, snap):
     loads = model.loads
     _print_header('Loads (%d)' % _safe_len(loads))
+    snap['loads'] = {}
     if _safe_len(loads) == 0:
-        print('  (none)')
+        out('  (none)')
         return
+    step_names = [s for s in model.steps.keys()
+                  if _class_name(model.steps[s]) != 'InitialStep']
     for name in loads.keys():
         load = loads[name]
         cls = _class_name(load)
-        step = getattr(load, 'createStepName', '<?>')
-        region = getattr(load, 'region', None)
-        region_name = getattr(region, 'name', None)
-        if region_name is None:
+        region_name = _region_name(_safe_attr(load, 'region', None))
+        suppressed = bool(_safe_attr(load, 'suppressed', False))
+        follower = _sym(_safe_attr(load, 'follower', None))
+        out('  %-25s %-20s region=%s%s' % (
+            name, cls, region_name, '  [SUPPRESSED]' if suppressed else ''))
+        lsnap = {'type': cls, 'region': region_name, 'suppressed': suppressed,
+                 'follower': follower, 'steps': {}}
+        # loadStates is the source of truth for values (gotcha #25);
+        # the load object's own attributes can be None after .inp re-import.
+        for sname in step_names:
             try:
-                region_name = str(region)
+                states = model.steps[sname].loadStates
+                if name not in states.keys():
+                    continue
+                state = states[name]
             except Exception:
-                region_name = '<?>'
-        print('  %-25s %-20s step=%-15s region=%s' % (
-            name, cls, step, region_name))
-        details = _fmt_load_magnitudes(load)
-        if details:
-            print('      %s' % details)
+                continue
+            vals = _load_values(state)
+            status = _sym(_safe_attr(state, 'status', None))
+            out('      step=%-15s status=%-12s %s' % (sname, status or '-', _fmt_vals(vals)))
+            lsnap['steps'][sname] = {'status': status, 'values': vals}
+        if not lsnap['steps']:
+            vals = _load_values(load)
+            if vals:
+                out('      (load object) %s' % _fmt_vals(vals))
+            lsnap['values'] = vals
+        if follower:
+            out('      follower=%s' % follower)
+        snap['loads'][name] = lsnap
 
 
-def report_point_inertias(assembly):
-    eng = getattr(assembly, 'engineeringFeatures', None)
-    inertias = getattr(eng, 'inertias', None) if eng is not None else None
+def report_point_inertias(assembly, snap):
+    eng = _safe_attr(assembly, 'engineeringFeatures', None)
+    inertias = _safe_attr(eng, 'inertias', None) if eng is not None else None
     n = _safe_len(inertias) if inertias is not None else 0
     _print_header('Point Inertias (%d)' % n)
+    snap['point_inertias'] = {}
     if n == 0:
-        print('  (none)')
+        out('  (none)')
         return 0.0
     total = 0.0
     for name in inertias.keys():
         it = inertias[name]
-        mass = getattr(it, 'mass', None)
-        region = getattr(it, 'region', None)
-        region_name = getattr(region, 'name', None)
-        if region_name is None:
-            try:
-                region_name = str(region)
-            except Exception:
-                region_name = '<?>'
+        mass = _as_float(_safe_attr(it, 'mass', None))
+        region_name = _region_name(_safe_attr(it, 'region', None))
         if mass is None:
-            print('  %-30s mass=<none>     region=%s' % (name, region_name))
+            out('  %-30s mass=<none>     region=%s' % (name, region_name))
         else:
-            try:
-                total += float(mass)
-            except Exception:
-                pass
-            print('  %-30s mass=%-12.6g region=%s' % (name, mass, region_name))
-    print('  -- point inertia total mass: %.6g' % total)
+            total += mass
+            out('  %-30s mass=%-12.6g region=%s  (per RP - gotcha: not total)' % (
+                name, mass, region_name))
+        snap['point_inertias'][name] = {'mass_per_point': mass, 'region': region_name}
+    out('  -- sum of per-point masses (x N RPs not applied): %.6g' % total)
     return total
 
 
-def report_nsm(model):
-    parts = model.parts
+def report_nsm(model, snap):
     total = 0.0
-    nsm_lines = []
-    count = 0
-    for pname in parts.keys():
-        part = parts[pname]
-        eng = getattr(part, 'engineeringFeatures', None)
-        if eng is None:
-            continue
-        nsm = getattr(eng, 'nonstructuralMasses', None)
-        if nsm is None:
-            nsm = getattr(eng, 'nonstructuralMass', None)
+    lines = []
+    snap['nonstructural_masses'] = {}
+    for pname in model.parts.keys():
+        eng = _safe_attr(model.parts[pname], 'engineeringFeatures', None)
+        nsm = _safe_attr(eng, 'nonstructuralMasses', None)
         if nsm is None:
             continue
         try:
-            keys = nsm.keys()
+            keys = list(nsm.keys())
         except Exception:
             continue
         for nname in keys:
             entry = nsm[nname]
-            mag = getattr(entry, 'magnitude', None)
-            units = getattr(entry, 'units', None)
-            units_str = ''
-            if units is not None:
-                try:
-                    units_str = units.name
-                except Exception:
-                    units_str = str(units)
-            dist = getattr(entry, 'distribution', None)
-            dist_str = ''
-            if dist is not None:
-                try:
-                    dist_str = dist.name
-                except Exception:
-                    dist_str = str(dist)
-            count += 1
-            if mag is not None:
-                try:
-                    total += float(mag)
-                except Exception:
-                    pass
-            nsm_lines.append(
-                '  part=%-20s name=%-25s mag=%-12s units=%-15s dist=%s' % (
-                    pname, nname,
-                    ('%.6g' % mag) if mag is not None else '<none>',
-                    units_str, dist_str))
-    _print_header('Non-Structural Masses (%d)' % count)
-    if count == 0:
-        print('  (none)')
+            mag = _as_float(_safe_attr(entry, 'magnitude', None))
+            units = _sym(_safe_attr(entry, 'units', None)) or ''
+            dist = _sym(_safe_attr(entry, 'distribution', None)) or ''
+            if mag is not None and units == 'TOTAL_MASS':
+                total += mag
+            lines.append('  part=%-20s name=%-25s mag=%-12s units=%-15s dist=%s' % (
+                pname, nname, ('%.6g' % mag) if mag is not None else '<none>',
+                units, dist))
+            snap['nonstructural_masses']['%s/%s' % (pname, nname)] = {
+                'magnitude': mag, 'units': units, 'distribution': dist}
+    _print_header('Non-Structural Masses (%d)' % len(lines))
+    if not lines:
+        out('  (none)')
         return 0.0
-    for line in nsm_lines:
-        print(line)
-    print('  -- NSM total magnitude (raw sum, ignore units mix): %.6g' % total)
+    for line in lines:
+        out(line)
+    out('  -- NSM total (TOTAL_MASS entries only): %.6g' % total)
     return total
 
 
-def report_mass_summary(point_inertia_total, nsm_total):
+def report_mass_summary(point_inertia_total, nsm_total, snap):
     _print_header('Mass Summary')
-    print('  point inertia mass : %.6g (tonne, assumed)' % point_inertia_total)
-    print('  NSM mass (raw sum) : %.6g (units may be MASS or MASS_PER_*)' % nsm_total)
-    print('  total known mass   : %.6g' % (point_inertia_total + nsm_total))
+    out('  point inertia (sum per-point) : %.6g tonne' % point_inertia_total)
+    out('  NSM (TOTAL_MASS only)         : %.6g tonne' % nsm_total)
+    out('  Structural mass is not included; read it from the .dat after a run.')
+    snap['mass_summary'] = {'point_inertia_per_point_sum': point_inertia_total,
+                            'nsm_total_mass': nsm_total}
 
 
 # ---------------------------------------------------------------------------
@@ -382,60 +414,97 @@ def report_mass_summary(point_inertia_total, nsm_total):
 # ---------------------------------------------------------------------------
 
 def inspect_model(model):
-    print('')
-    print(SEP_MAJOR)
-    print('# MODEL: %s' % model.name)
-    print(SEP_MAJOR)
-    report_steps(model)
-    report_parts(model)
+    snap = {}
+    out('')
+    out(SEP_MAJOR)
+    out('# MODEL: %s' % model.name)
+    out(SEP_MAJOR)
+    report_steps(model, snap)
+    report_parts(model, snap)
     assembly = model.rootAssembly
-    report_instances(assembly)
-    report_assembly_sets(assembly)
-    report_assembly_surfaces(assembly)
-    report_reference_points(assembly)
-    report_constraints(model)
-    report_loads(model)
-    pi_total = report_point_inertias(assembly)
-    nsm_total = report_nsm(model)
-    report_mass_summary(pi_total, nsm_total)
+    report_instances(assembly, snap)
+    report_assembly_sets(assembly, snap)
+    report_assembly_surfaces(assembly, snap)
+    report_reference_points(assembly, snap)
+    report_constraints(model, snap)
+    report_loads(model, snap)
+    pi_total = report_point_inertias(assembly, snap)
+    nsm_total = report_nsm(model, snap)
+    report_mass_summary(pi_total, nsm_total, snap)
+    return snap
 
 
-def main():
+def _parse_args():
+    """Args after '--' (gotcha #18: Abaqus may inject its own flags before it)."""
     if '--' in sys.argv:
         args = sys.argv[sys.argv.index('--') + 1:]
     else:
-        args = sys.argv[2:] if len(sys.argv) > 2 else []
-    if len(args) >= 3:
-        sys.stdout = open(args[2], 'w')
-    cae_path = args[0] if len(args) >= 1 else DEFAULT_CAE
-    target_model = args[1] if len(args) >= 2 else None
+        args = [a for a in sys.argv[1:]
+                if not a.startswith('-') and not a.endswith('.py')]
+    return args
 
-    print(SEP_MINOR)
-    print('  CAE: %s' % cae_path)
+
+def _write_outputs(report_path, snapshot):
+    f = open(report_path, 'w')
+    f.write('\n'.join(_lines) + '\n')
+    f.close()
+    json_path = os.path.splitext(report_path)[0] + '.json'
+    f = open(json_path, 'w')
+    json.dump(snapshot, f, indent=1, sort_keys=True)
+    f.close()
+    print('Report: %s' % report_path)
+    print('JSON  : %s' % json_path)
+
+
+def main():
+    args = _parse_args()
+    if not args:
+        print('Usage: abaqus cae noGUI=inspect_model.py -- <cae_path> [model_name|-] [report_path]')
+        sys.exit(1)
+    cae_path = args[0]
+    target_model = args[1] if len(args) >= 2 and args[1] != '-' else None
+    if len(args) >= 3:
+        report_path = args[2]
+    else:
+        base = os.path.splitext(os.path.basename(cae_path))[0]
+        report_path = os.path.join(os.getcwd(), '_inspect_%s.txt' % base)
+
+    snapshot = {'cae': cae_path, 'models': {}}
+    out(SEP_MINOR)
+    out('  CAE: %s' % cae_path)
     try:
         openMdb(pathName=cae_path)
     except Exception as exc:
-        print('  ERROR: failed to open CAE: %s' % exc)
+        out('  ERROR: failed to open CAE: %s' % exc)
+        out('  (Is the .cae open in the CAE GUI? Close it first - gotcha #21.)')
+        snapshot['error'] = str(exc)
+        _write_outputs(report_path, snapshot)
         sys.exit(1)
 
     model_names = list(mdb.models.keys())
-    print('  Models: %s' % model_names)
-    print(SEP_MINOR)
+    out('  Models: %s' % model_names)
+    out(SEP_MINOR)
 
     if target_model is not None:
-        if target_model not in mdb.models:
-            print('  ERROR: model %r not found in CAE' % target_model)
+        if target_model not in mdb.models.keys():
+            out('  ERROR: model %r not found in CAE' % target_model)
+            snapshot['error'] = 'model %r not found' % target_model
+            _write_outputs(report_path, snapshot)
             sys.exit(2)
-        inspect_model(mdb.models[target_model])
-    else:
-        for name in model_names:
-            inspect_model(mdb.models[name])
+        model_names = [target_model]
 
-    print('')
-    print(SEP_MINOR)
-    print('  Inspection complete (mdb NOT saved).')
-    print(SEP_MINOR)
+    for name in model_names:
+        try:
+            snapshot['models'][name] = inspect_model(mdb.models[name])
+        except Exception as exc:
+            out('  ERROR while inspecting %s: %s' % (name, exc))
+            snapshot['models'][name] = {'error': str(exc)}
+
+    out('')
+    out(SEP_MINOR)
+    out('  Inspection complete (mdb NOT saved).')
+    out(SEP_MINOR)
+    _write_outputs(report_path, snapshot)
 
 
-if __name__ == '__main__':
-    main()
+main()

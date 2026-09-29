@@ -79,8 +79,10 @@ freely; anything that mutates a CAE goes through user confirmation.
    block and what it will mutate) and wait for approval before running.
 4. **Run** — `abaqus cae noGUI=<script>.py > _<script>.log 2>&1`, using
    the launcher matching the CAE version (see `references/projects.md`).
-5. **Verify** — re-run the inspect step, report the diff to the user.
-   Results go to a log/JSON file, never stdout-only.
+5. **Verify** — re-run the inspect step and diff the two JSON snapshots
+   `inspect_model.py` writes (before vs after); report the diff to the
+   user. Results go to a report/JSON file, never stdout-only. Remind the
+   user to reopen the `.cae` if it is open in the GUI (it won't refresh).
 
 ## Bundled References
 
@@ -91,7 +93,7 @@ Load only what the task needs.
 | `references/abaqus_api.md` | **Read this first** for any API call. Top 10 gotchas, cookbook snippets, symbolic constants, imports cheatsheet, invocation patterns. |
 | `references/projects.md` | **Read before touching any CAE.** Per-project profiles: CAE paths, Abaqus version launchers, model/part/instance names, script pipelines, known caveats. |
 | `references/patterns.md` | Read when you need to do something the project already does (fin loads, engine mass, equation constraints, calibration). Maps each task to the existing script that implements it. |
-| `references/conventions.md` | Read when creating a new script: units (mm-N-tonne), file layout, naming, logging, JSON reports, coding style for Abaqus Py 2.7. |
+| `references/conventions.md` | Read when creating a new script: units (mm-N-tonne), file layout, naming, logging, JSON reports, coding style for Abaqus Python (2.7 on ≤2023, 3.10 on 2024+). |
 
 ## Bundled Scripts
 
@@ -99,8 +101,8 @@ Do not duplicate these — invoke or copy from them.
 
 | File | Purpose |
 |------|---------|
-| `scripts/skill_template.py` | Boilerplate for new noGUI scripts — encoding header, standard imports, top "User inputs" block, `find_existing_rp` helper, idempotent helper, main pattern. Copy this when creating a new script. |
-| `scripts/inspect_model.py` | Read-only inspector. Run with `abaqus cae noGUI=inspect_model.py -- <cae_path> [model_name]`. Reports steps, parts, sets, surfaces, RPs (with duplicate detection), constraints, loads, masses. |
+| `scripts/skill_template.py` | Boilerplate for new noGUI scripts — encoding header, standard imports, top "User inputs" block, report-file `log()`, `find_existing_rp` / `ensure_assembly_set` / `backup_cae` helpers, try/except main that never saves on failure. Copy this when creating a new script. |
+| `scripts/inspect_model.py` | Read-only inspector. Run with `abaqus cae noGUI=inspect_model.py -- <cae_path> [model_name\|-] [report_path]`. Writes a text report + JSON snapshot (default `_inspect_<cae>.txt/.json` in cwd): steps, parts, sets, surfaces, RPs (with duplicate detection), constraints, loads with per-step values from `loadStates`, suppressed flags, masses. |
 
 ## Project at a Glance
 
@@ -150,18 +152,19 @@ The full version with mitigations is in `references/abaqus_api.md`.
 
 ## Workflow Recipes (most common tasks)
 
-### "Apply a new load to the cross model"
+### "Apply a new load to an existing model"
 
 1. Read `references/patterns.md` §5 (concentrated forces & moments).
 2. Add the magnitude to the script's top "User inputs" block with a
    comment on its source.
 3. Copy `scripts/skill_template.py` → `apply_<thing>.py` in the
-   appropriate `workflow/stage2_loads/` (or project root for
-   compatibility).
+   project's script directory (see `references/projects.md`).
 4. Inside, after `openMdb`, find the right model and step (`get_last_step`).
 5. Idempotent: delete the load if present, then `model.ConcentratedForce(...)`.
-6. `mdb.save()`, run with `abaqus cae noGUI=apply_<thing>.py > _apply_<thing>.log 2>&1`.
-7. Run `scripts/inspect_model.py` to confirm.
+6. Show the user the User inputs block and what will change; after
+   approval run `abaqus cae noGUI=apply_<thing>.py > _apply_<thing>.log 2>&1`.
+7. Read the script's report file, then run `scripts/inspect_model.py`
+   and diff against the pre-change snapshot.
 
 ### "Build a new derived model"
 
@@ -170,7 +173,7 @@ The full version with mitigations is in `references/abaqus_api.md`.
 2. `mdb.Model(name='New', objectToCopy=mdb.models['Source'])` →
    `model.rootAssembly.regenerate()`.
 3. If geometry changes (rotate / mirror), call `assembly.rotate(...)`.
-4. Walk the project's `delete_fin_features`-style pattern: loads,
+4. Delete the features that must be rebuilt in order: loads,
    constraints, sets, surfaces, then RP features by coordinate.
 5. Re-create features against the new geometry. Always look up RPs by
    coordinate, never by stored ID.
@@ -207,9 +210,12 @@ The full version with mitigations is in `references/abaqus_api.md`.
 ### "Check what's in the CAE"
 
 1. Run `abaqus cae noGUI=<skill-path>/scripts/inspect_model.py -- <path/to/model.cae>`.
-2. The script prints steps, parts, sets, surfaces, RPs (with duplicate
-   detection at 10 mm tolerance), constraints, loads, masses, totals.
-3. It does **not** save the CAE — safe to run anytime.
+2. Read the report it writes (`_inspect_<cae>.txt` in cwd, plus a
+   `.json` snapshot): steps, parts, sets, surfaces, RPs (duplicate
+   detection at 10 mm), constraints, loads with per-step values,
+   suppressed flags, masses.
+3. It does **not** save the CAE — safe to run anytime (but the CAE must
+   not be open in the GUI).
 
 ### "Add a non-structural mass"
 
@@ -248,12 +254,15 @@ The full version with mitigations is in `references/abaqus_api.md`.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `KeyError` on `assembly.referencePoints[id]` after copying a model | RP IDs renumber on copy/regenerate | Look up RPs by feature coords (`find_existing_rp` helper in `scripts/skill_template.py`) |
-| Pressure load applies inward when you wanted outward | side2 used instead of side1 (or vice versa) | Use `side1Elements` for outward shell normal |
+| Pressure pushes the wrong way | Positive `magnitude` pushes *against* the bound side's normal; the load may be on SNEG instead of SPOS (common after `.inp` re-import) | Check which side the load is bound to (`writeInput()` + grep `SPOS`/`SNEG`); rebind to the `side1Elements` surface or flip the sign. See API gotchas #6/#23/#24 |
 | `model.Coupling` is undefined in noGUI script | Missing import | Add `from caeModules import *` |
 | Tuple of one RP raises `TypeError` | Missing trailing comma | `referencePoints=(rp,)` |
-| Total fin mass is 4× too large | `PointMassInertia` writes magnitude per RP | Divide total mass by N RPs before passing |
+| Total point mass is N× too large | `PointMassInertia` writes magnitude per RP | Divide total mass by N RPs before passing |
 | Job submit fails on consistency check | Region went stale after regen | Replace ad-hoc Regions with persistent assembly Sets |
-| `_apply_loads.log` shows license messages but nothing else | stdout not flushed before crash | Call `print(...)` early; check Abaqus `.rpy` for the actual error |
+| `_<script>.log` shows license messages but nothing else | stdout lost/unflushed under noGUI | Read the script's `REPORT_PATH` file (the template writes tracebacks there); else check `abaqus.rpy` |
+| `openMdb` fails with "File open failed" / "0 out of 2 licenses" | The `.cae` is open in the CAE GUI | Ask the user to close CAE, then rerun |
+| `NameError: __file__` | noGUI runs scripts via `execfile` | Use `os.getcwd()` or an absolute path in User inputs |
+| `TypeError: ... found 'generator'` | `from abaqus import *` shadows `sum` | `sum([... for ...])` |
 | Equation constraint silently does nothing | Wrong CSYS id, or DOF index off (radial vs axial) | DOF 1=radial, 2=tangential, 3=axial in cylindrical CSYS |
 
 ## What This Skill Does Not Cover
@@ -262,9 +271,10 @@ The full version with mitigations is in `references/abaqus_api.md`.
   skill (handled in NX/SpaceClaim and pre-built into the project CAE).
   Simple part/mesh creation for standalone analysis scripts IS covered —
   see `references/abaqus_api.md` "Building a Model from Scratch".
-- Material database or composite layup definitions (handled by the
-  separate `hyperx-skill` for HyperX integration).
+- Material database or composite layup definitions (usually owned by a
+  separate sizing tool/skill).
 - Pre-CAE CAD operations (handled upstream by the user in NX/SpaceClaim).
 
-If a request lands in those areas, fall back to general Abaqus
-documentation (`docs/api-ref/` in the project) or ask the user.
+If a request lands in those areas, fall back to the project's own
+Abaqus documentation (if `references/projects.md` lists one) or ask the
+user.

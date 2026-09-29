@@ -20,6 +20,9 @@ Context for sessions that update this skill. Read before editing.
 - New API gotcha: add to `references/abaqus_api.md` gotcha table.
 - `SKILL.md` stays generic — no project names or paths.
 - New scripts start from `scripts/skill_template.py`.
+- Run `python3 tools/check_skill.py` before committing (plain Python 3,
+  no Abaqus needed). It fails on mbcs headers, `sum(generator)` and
+  `__file__` in scripts/snippets, and out-of-order gotcha numbering.
 
 ## Known Design Choices
 
