@@ -3,7 +3,10 @@
 Condensed reference for the Abaqus/CAE scripting API. Source: Abaqus
 Scripting Reference Guide v6.6–2017, abqpy docs, project field experience.
 
-## Top 10 Gotchas
+## API Gotchas
+
+The first 10 are the everyday ones (mirrored in `SKILL.md`); 11+ are
+import/round-trip, noGUI-runtime, and ODB traps.
 
 | # | Gotcha | Why it bites | Fix |
 |---|--------|--------------|-----|
@@ -39,15 +42,15 @@ Scripting Reference Guide v6.6–2017, abqpy docs, project field experience.
 | 30 | **Internal surfaces `_M<N>` are NOT in `assembly.surfaces`** | After ModelFromInputFile, a Pressure load's `region` may reference an internal surface name like `_M104`. The named user-facing surface (`AERO_OML_SURF`) still exists, but the load is bound to the internal one. `assembly.surfaces['_M104']` raises KeyError | When cloning such a load, fall back to the equivalent named surface: `if name.startswith('_M') and 'AERO_OML_SURF' in asm.surfaces: return asm.surfaces['AERO_OML_SURF']`. **Caveat:** this changes the SPOS/SNEG side binding — see #24, may need magnitude flip |
 | 31 | **DiscField pressure cloned to a different surface gives wrong IR** | A `Pressure` load with `distributionType=DISCRETE_FIELD` is bound to specific elements. Cloning it onto a *different* surface (even covering the same elements) produces measurably different IRF/IRM than the original — observed ~5–15% deviation in the project. The cause is element-side or per-element field-value rebinding | For trim-critical analysis, do NOT use clone-based per-load decomposition with DiscFields. Use `load.suppress()` directly on the original load (see patterns §19). Trim diagnostics built on cloning will be wrong by the AeroPressure clone error |
 | 32 | **`__file__` is undefined in Abaqus CAE noGUI** | Scripts run via `abaqus cae noGUI=script.py` are loaded with `execfile`, which does not set `__file__`. Any `os.path.dirname(__file__)` raises `NameError` | Use `os.getcwd()` (working directory is set to where you invoked abaqus) or hardcode a known relative path like `os.path.join(os.getcwd(), 'workflow', 'stage3_verify')` |
+| 33 | **CAE GUI silently mutates the .cae mid-session** | If the user has the .cae open in CAE GUI while you run noGUI scripts, they may edit load values (or material/section properties) directly. Each `openMdb` reads disk state at-that-moment, so consecutive script runs can return different physics results without any code change. License manager will report `<0 out of 2 licenses available>` to confirm GUI is open | Always dump current load magnitudes (`m.steps[step].loadStates[name].cf3` etc.) at the START of any tuning script and print them. If results diverge between runs, ask the user whether they edited the model in GUI |
 | 34 | **ODB version mismatch** | `openOdb()` raises `OdbError: The database is from a previous release of Abaqus` when the ODB was written by an older Abaqus version | Use the version-specific launcher matching the ODB origin: `abq2024 python script.py` or `abq2024 cae noGUI=script.py`. Alternatively upgrade: `abaqus -upgrade -job new_name -odb old_name` (creates a new file) |
 | 35 | **`# -*- coding: mbcs -*-` causes SyntaxError** | On some Abaqus/Windows configurations, the `mbcs` codec fails to decode the BOM or certain byte sequences: `SyntaxError: 'mbcs' codec can't decode bytes in position 0--1` | Use `# -*- coding: utf-8 -*-` instead. Works on both Abaqus 2024 and 2025 |
 | 36 | **`print()` output lost in PowerShell capture** | `abaqus cae noGUI=script.py` stdout is buffered by the Abaqus launcher; PowerShell frequently receives empty output even on successful runs | Write results to a file inside the script (`with open(path, 'w') as f: ...`) and read it back with `Read` or `Get-Content`. Never rely on captured stdout for ODB extraction results |
-| 33 | **CAE GUI silently mutates the .cae mid-session** | If the user has the .cae open in CAE GUI while you run noGUI scripts, they may edit load values (or material/section properties) directly. Each `openMdb` reads disk state at-that-moment, so consecutive script runs can return different physics results without any code change. License manager will report `<0 out of 2 licenses available>` to confirm GUI is open | Always dump current load magnitudes (`m.steps[step].loadStates[name].cf3` etc.) at the START of any tuning script and print them. If results diverge between runs, ask the user whether they edited the model in GUI |
 
 ## Imports Cheatsheet
 
 ```python
-# -*- coding: mbcs -*-
+# -*- coding: utf-8 -*-        # NOT mbcs - see gotcha #35
 from abaqus import *
 from abaqusConstants import *
 import regionToolset
@@ -136,20 +139,10 @@ assembly.Set(name='FinCP_2_Set',
 
 ### Find an existing RP within tolerance (avoid duplicates)
 
-```python
-def find_rp_near(assembly, x, y, z, tol=1.0):
-    for name, feat in assembly.features.items():
-        if not name.startswith('RP-'):
-            continue
-        if not hasattr(feat, 'xValue'):
-            continue
-        d = math.sqrt((feat.xValue-x)**2 + (feat.yValue-y)**2 + (feat.zValue-z)**2)
-        if d < tol:
-            fid = getattr(feat, 'id', None)
-            if fid is not None and fid in assembly.referencePoints.keys():
-                return fid
-    return None
-```
+Copy `find_existing_rp(assembly, x, y, z, tolerance)` from
+`scripts/skill_template.py` — it returns the key of the *nearest* live RP
+within tolerance (skipping datum points and orphan features), or `None`.
+Don't re-implement it per script.
 
 ### Surface from element set (positive normal)
 
@@ -490,7 +483,7 @@ target = (LX, LY/2, LZ/2)
 nodes = inst.nodes
 best, best_d2 = None, 1e30
 for n in nodes:
-    d2 = sum((n.coordinates[i] - target[i])**2 for i in range(3))
+    d2 = sum([(n.coordinates[i] - target[i])**2 for i in range(3)])  # list, not generator (#16)
     if d2 < best_d2:
         best, best_d2 = n, d2
 tip_set = assembly.Set(name='Tip', nodes=inst.nodes.sequenceFromLabels((best.label,)))

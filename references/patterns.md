@@ -4,6 +4,11 @@ This catalog distills reusable workflows from production Abaqus automation
 scripts. When you need to do one of these things, mimic the pattern —
 don't reinvent it.
 
+**About the `Reference:` lines:** they name the script in the origin
+project where the pattern was proven. They are provenance, not files
+shipped with this skill. If the user's project has a script of that name,
+reuse it; otherwise implement from the snippet here.
+
 ## 1. Model creation / copy / rename
 
 **Reference:** `build_models.py`, `workflow/stage1_build/build_models.py`
@@ -619,7 +624,8 @@ Three-phase loop:
    gravity component, run final job.
 
 Pure-math helpers (`correction_calculator.py`) work in plain Python 3;
-the orchestrator (`calibrate.py`) runs in Abaqus Python 2 via
+the orchestrator (`calibrate.py`) runs in the embedded Abaqus Python
+(2.7 on ≤2023, 3.10 on 2024+) via
 `abaqus cae noGUI=calibrate.py -- --cae <path> --loads <json> ...`.
 
 ## 24. ODB post-processing — reading history and field outputs
@@ -972,8 +978,9 @@ for edge in cell.getEdges():
 - **Idempotency**: Every script that modifies the model checks for
   pre-existing features (`if 'Name' in container`) and either reuses or
   deletes-and-recreates. Never assume a clean slate.
-- **Logging**: redirect stdout to `_<scriptname>.log` via shell.
-  Inside the script, `print(...)` to that log; no `logging` module.
+- **Logging**: the shell redirect `_<scriptname>.log` catches launcher
+  noise and tracebacks; results go through the template's `log()` helper
+  into a separate `REPORT_PATH` file. No `logging` module.
 - **JSON reports**: results-bearing scripts write a sibling `*.json`
   with the headline numbers. Downstream tools consume the JSON, not the
   script's stdout.

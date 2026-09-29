@@ -73,7 +73,7 @@ in the project root. ODB existence is the skip-if-done signal.
 
 | Use case | Interpreter | Notes |
 |----------|-------------|-------|
-| Abaqus CAE scripts | `abaqus cae noGUI=script.py` | Abaqus 2025 = embedded **Py 3.x** (older Abaqus = Py 2.7). Keep `# -*- coding: utf-8 -*-` and `%` formatting for cross-version portability; use `except Exception as ex:` (not the Py2 comma form) |
+| Abaqus CAE scripts | `abaqus cae noGUI=script.py` | Abaqus 2024+ = embedded **Py 3.10**; 2023 and older = Py 2.7. Keep `# -*- coding: utf-8 -*-` and `%` formatting for cross-version portability; use `except Exception as ex:` (not the Py2 comma form) |
 | ODB postprocessing | `abaqus python script.py` | Same embedded interpreter, no GUI overhead |
 | ODB from older version | `abq2024 cae noGUI=script.py` or `abq2024 python script.py` | **ODB version must match reader** — use the version-specific launcher (e.g., `abq2024`) when the ODB was created by an older Abaqus release. Otherwise: `OdbError: The database is from a previous release` |
 | Pure helpers (parsing, math) | Your conda/venv Python (e.g., `python3`) | Py 3.x; **never** Windows Store python shim |
@@ -92,11 +92,15 @@ The Windows Store `python` shim does nothing useful and breaks scripts.
 Windows PowerShell 5.1 wraps native command stderr in `ErrorRecord` objects.
 For `abaqus` invocations:
 
-- **Don't use `2>&1`** — the license-checkout banner goes to stderr, gets
-  wrapped, and ends up clobbering stdout in the file.
-- **Use** `abaqus cae noGUI=script.py | Out-Null` and have the script write
-  its own report file (per "Reporting from inside Abaqus scripts" below).
-  Then read the report file with `Get-Content`.
+- **Don't use a bare PowerShell `2>&1`** — the license-checkout banner goes
+  to stderr, gets wrapped, and ends up clobbering stdout in the file. The
+  `> _script.log 2>&1` form used elsewhere in this skill is for cmd/bash;
+  from PowerShell run it through cmd:
+  `cmd /c "abaqus cae noGUI=script.py > _script.log 2>&1"`, or just
+  `abaqus cae noGUI=script.py | Out-Null`.
+- Either way, the script writes its own report file (per "Reporting from
+  inside Abaqus scripts" below) and that file is what you read back
+  (`Get-Content`), never the captured stdout.
 - **For ad-hoc inspection** of the Abaqus session log, read `abaqus.rpy`
   with `Get-Content abaqus.rpy -Tail 60` — the script's `print(...)` lines
   appear there as `#: <text>` (the replay-comment prefix).
@@ -115,9 +119,9 @@ overhead and to use full Py 3 stdlib:
 2 licenses available" if the same `.cae` is open in an interactive CAE
 session. The lock is per-file, not per-process. Before running any
 script that calls `openMdb` + `mdb.save()`, ask the user (or close
-your own session) so the file is releasable. After the script runs,
-CAE's viewer auto-refreshes the model tree on next focus, so the user
-doesn't need to reopen the file.
+your own session) so the file is releasable. After the script runs, tell
+the user to reopen the `.cae` (`File → Close`, then open) — an already
+open GUI keeps showing its stale snapshot (API gotcha #22).
 
 ## Reporting from inside Abaqus scripts
 
@@ -216,7 +220,8 @@ print('Done.')
 ```
 
 - `%` formatting (Py 2 compatible); no f-strings.
-- `print(...)` for everything; no `logging` module.
+- Output via the template's `log()` helper (writes `REPORT_PATH`, echoes
+  to stdout); no `logging` module.
 - Functions take `model` (not `mdb`); the caller picks which model.
 - Idempotent: every modifier checks `if name in container` before
   creating; uses `del` then recreate when shape may have changed.
