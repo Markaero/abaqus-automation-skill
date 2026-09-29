@@ -25,11 +25,17 @@ def md_python_blocks(text):
     return re.findall(r'```python\n(.*?)```', text, re.S)
 
 
-# 1. Scripts compile and use a utf-8 header (gotcha #35)
-for name in sorted(os.listdir(os.path.join(ROOT, 'scripts'))):
-    if not name.endswith('.py'):
-        continue
-    rel = os.path.join('scripts', name)
+def script_files():
+    out = []
+    for d, _, files in os.walk(os.path.join(ROOT, 'scripts')):
+        for n in files:
+            if n.endswith('.py'):
+                out.append(os.path.relpath(os.path.join(d, n), ROOT))
+    return sorted(out)
+
+
+# 1. Scripts (incl. abqlib) compile and use a utf-8 header (gotcha #35)
+for rel in script_files():
     try:
         py_compile.compile(os.path.join(ROOT, rel), doraise=True)
     except py_compile.PyCompileError as exc:
@@ -38,8 +44,7 @@ for name in sorted(os.listdir(os.path.join(ROOT, 'scripts'))):
         errors.append('%s: first line must be "# -*- coding: utf-8 -*-"' % rel)
 
 # 2. Code (scripts + python snippets) must follow the skill's own gotchas
-code_sources = [(os.path.join('scripts', n), read(os.path.join('scripts', n)))
-                for n in os.listdir(os.path.join(ROOT, 'scripts')) if n.endswith('.py')]
+code_sources = [(rel, read(rel)) for rel in script_files()]
 md_files = ['SKILL.md'] + [os.path.join('references', n)
                            for n in sorted(os.listdir(os.path.join(ROOT, 'references')))
                            if n.endswith('.md')]
@@ -61,7 +66,21 @@ nums = [int(n) for n in re.findall(r'^\| (\d+) \| \*\*', api, re.M)]
 if nums != list(range(1, len(nums) + 1)):
     errors.append('references/abaqus_api.md: gotcha rows not numbered 1..N in order: %s' % nums)
 
-# 4. SKILL.md frontmatter
+# 4. abqlib stays Py 2.7 compatible (Abaqus <=2023)
+for rel in script_files():
+    code = read(rel)
+    if re.search(r'''(?<![\w'"])f['"]''', code):
+        errors.append('%s: f-string (breaks Abaqus Py 2.7)' % rel)
+    if re.search(r'\bnonlocal\b|yield from|^\s*async\s+def|:=', code, re.M):
+        errors.append('%s: Py3-only syntax (breaks Abaqus Py 2.7)' % rel)
+
+# 5. API catalog regenerated from the current docstrings
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import gen_catalog  # noqa: E402
+if read(os.path.join('references', 'api_catalog.md')) != gen_catalog.build():
+    errors.append('references/api_catalog.md is stale: run python3 tools/gen_catalog.py')
+
+# 6. SKILL.md frontmatter
 skill = read('SKILL.md')
 if not re.match(r'---\nname: [a-z0-9-]+\ndescription: .+?\n---\n', skill, re.S):
     errors.append('SKILL.md: missing/invalid name+description frontmatter')

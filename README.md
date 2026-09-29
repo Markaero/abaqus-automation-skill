@@ -1,9 +1,10 @@
 # Abaqus Automation — Claude Code Skill
 
 A [Claude Code](https://claude.ai/code) skill that makes the AI assistant
-fluent in Abaqus/CAE Python scripting. It bundles 36 documented API
-gotchas, 29 reusable workflow patterns, a script template, and a
-read-only model inspector — distilled from production finite-element
+fluent in Abaqus/CAE Python scripting. It bundles a categorized,
+idempotent function library (`abqlib`), 36 documented API gotchas,
+29 reusable workflow patterns, a script template, and a read-only
+model inspector — distilled from production finite-element
 analysis work.
 
 ## Who This Is For
@@ -39,18 +40,52 @@ abaqus-automation/
 ├── README.md                       # This file
 ├── .gitignore
 ├── references/
+│   ├── api_catalog.md              # abqlib functions by category (generated)
 │   ├── abaqus_api.md               # 36 API gotchas + cookbook snippets
 │   ├── patterns.md                 # 29 reusable workflow patterns
 │   ├── conventions.md              # Project conventions (units, layout, style)
 │   └── projects.md                 # Per-project profiles (customize this)
 ├── scripts/
+│   ├── abqlib/                     # Categorized function library (import it)
 │   ├── skill_template.py           # Boilerplate for new noGUI scripts
 │   └── inspect_model.py            # Read-only CAE model inspector
-└── tools/
-    └── check_skill.py              # Consistency checks (plain Python 3)
+├── tools/
+│   ├── check_skill.py              # Consistency checks (plain Python 3)
+│   └── gen_catalog.py              # Regenerates references/api_catalog.md
+└── tests/                          # abqlib unit tests on fake Abaqus objects
 ```
 
 ## Key Features
+
+### Categorized Function Library (`abqlib`)
+
+Claude routes each request to a category and composes library calls
+instead of writing raw API code every time:
+
+| Module | Covers |
+|--------|--------|
+| `session` | open / backup / save CAE, copy models |
+| `sets` | assembly sets, part→assembly promotion, surfaces, node sets by coordinate |
+| `rp` | find-or-create reference points by coordinate, duplicates |
+| `constraints` | DISTRIBUTING / KINEMATIC couplings, ties, equations, cylindrical csys |
+| `bcs` | displacement BC, encastre |
+| `loads` | force, moment, pressure, gravity, inertia relief, per-step values, suppress |
+| `mass` | point masses (total auto-split per RP), non-structural mass |
+| `steps` | static step, field / history outputs |
+| `job` | submit + wait, skip-if-done, success from `.sta`, write `.inp` |
+| `odb` | history values, IR summary (with g conversion), field max |
+| `cleanup` | delete in the order Abaqus requires |
+
+Every `ensure_*` is idempotent. Full signatures:
+[`references/api_catalog.md`](references/api_catalog.md).
+
+```python
+from abqlib import rp, constraints, loads, mass
+k = rp.ensure_rp(asm, (6374.1, 853.3, 0.0), set_name='Fin1_RP')
+constraints.ensure_coupling(model, 'Fin1_Cpl', k, asm.surfaces['FinBase_1_Surf'])
+loads.ensure_cforce(model, 'Fin1_Load', asm.sets['Fin1_RP'], (120.0, 0.0, 850.0))
+mass.ensure_point_mass(asm, 'Fin_Mass', fin_keys, total_mass=0.0686)
+```
 
 ### API Gotchas (36 documented traps)
 
@@ -121,9 +156,16 @@ a half-modified CAE.
 
 ### Maintaining the skill
 
-Run `python3 tools/check_skill.py` before committing. It needs no Abaqus
-and catches the skill contradicting its own gotchas (mbcs headers,
-`sum(generator)`, `__file__`, gotcha numbering).
+Before committing:
+
+```bash
+python3 tools/gen_catalog.py              # after changing abqlib docstrings
+python3 tools/check_skill.py              # consistency + Py2.7 syntax + catalog freshness
+python3 -m unittest discover -s tests     # abqlib logic on fake Abaqus objects
+```
+
+None of these need Abaqus. The tests check abqlib's logic, not that
+Abaqus accepts the calls, so smoke-test new functions in a real CAE.
 
 ## Customization
 

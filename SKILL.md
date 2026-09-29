@@ -1,6 +1,6 @@
 ---
 name: abaqus-automation
-description: Automate Abaqus/CAE Python scripting for finite-element analysis projects. Use whenever the user wants to create, modify, copy, or rotate Abaqus models, apply or change loads (concentrated forces, moments, pressure, gravity, mapped fields, thrust), define or edit boundary conditions, build couplings (DISTRIBUTING/KINEMATIC) or tie/equation constraints, manage reference points and assembly sets/surfaces, add point masses or non-structural masses, submit jobs and read .odb history outputs, inspect the model state (RPs, sets, loads, masses, constraints, steps), or run calibration/diagnostic loops. Triggers on requests mentioning: Abaqus, .cae files, .odb, .inp, noGUI scripts, abaqus cae, Mdb, mdb.Job, ConcentratedForce, Coupling, Pressure, Gravity, ReferencePoint, PointMassInertia, NonstructuralMass, Equation, Tie, aero loads, MaxQ, inertia relief, IRA/IRF/IRM, or any script that needs to be invoked via `abaqus cae noGUI=...`. Use even when the user only references a script filename, an RP, a load name, or asks to "check what's in the CAE".
+description: Automate Abaqus/CAE Python scripting for finite-element analysis projects. Use whenever the user wants to create, modify, copy, or rotate Abaqus models, apply or change loads (concentrated forces, moments, pressure, gravity, mapped fields, thrust), define or edit boundary conditions, build couplings (DISTRIBUTING/KINEMATIC) or tie/equation constraints, manage reference points and assembly sets/surfaces, add point masses or non-structural masses, submit jobs and read .odb history outputs, inspect the model state (RPs, sets, loads, masses, constraints, steps), or run calibration/diagnostic loops. Triggers on requests mentioning: Abaqus, .cae files, .odb, .inp, noGUI scripts, abaqus cae, Mdb, mdb.Job, ConcentratedForce, Coupling, Pressure, Gravity, ReferencePoint, PointMassInertia, NonstructuralMass, Equation, Tie, aero loads, MaxQ, inertia relief, IRA/IRF/IRM, or any script that needs to be invoked via `abaqus cae noGUI=...`. Also triggers on Chinese requests such as 有限元, 建模, 加載荷, 邊界條件, 耦合, 參考點, 集中質量, 送出計算, 讀 ODB. Use even when the user only references a script filename, an RP, a load name, or asks to "check what's in the CAE".
 ---
 
 # Abaqus Automation
@@ -12,10 +12,12 @@ conventions so you can create models, apply loads and boundary
 conditions, build couplings, manage masses, submit jobs, and inspect
 state — first try, no API guesswork.
 
-The project FEA scripts already implement most patterns; your job is to
-**reuse them**, follow project conventions, and avoid the API gotchas
-that silently produce wrong results (zero loads, flipped pressure,
-stale regions, orphan RPs, KINEMATIC where DISTRIBUTING was intended).
+The bundled `abqlib` function library already implements the common
+operations as idempotent, gotcha-safe calls; your job is to **route the
+request to the right functions and compose them**, follow project
+conventions, and avoid the API gotchas that silently produce wrong
+results (zero loads, flipped pressure, stale regions, orphan RPs,
+KINEMATIC where DISTRIBUTING was intended).
 
 **Before writing or editing any Abaqus script, consult the bundled
 references.** The Abaqus API has many traps that won't show up at
@@ -55,15 +57,59 @@ happens to contain stress numbers, or web UI work).
 ## How to Use This Skill
 
 ```text
-1. Read the relevant reference file(s) below for the task at hand.
-2. Reuse an existing project script when one fits — don't reinvent.
-3. Follow conventions in references/conventions.md (units, naming,
-   imports, idempotency).
-4. Use scripts/skill_template.py as the starting boilerplate for any
-   new noGUI script.
-5. Use scripts/inspect_model.py before/after any non-trivial change
-   to verify the model state.
+1. Route the request with the table below -> which abqlib module(s).
+2. If a "Must know" input is missing, ask (see "Clarify before writing").
+3. Open references/api_catalog.md, pick functions, compose a script
+   from scripts/skill_template.py. Write raw API calls only for what
+   abqlib does not cover (use references/abaqus_api.md for those).
+4. Follow the Collaboration Workflow: inspect -> write -> confirm -> run -> verify.
 ```
+
+## Routing: request -> abqlib module
+
+`scripts/abqlib/` is a categorized function library; every `ensure_*`
+is idempotent. The signatures are in `references/api_catalog.md`
+(generated from the code, so it is always current).
+
+| User says (en / 中文) | Module | Typical calls | Must know |
+|---|---|---|---|
+| open / copy / save CAE, new derived model · 開檔、複製模型 | `session` | `open_cae`, `copy_model`, `save_cae` | CAE path, model names |
+| set, surface, promote part set, node by coordinate · 建 set、surface | `sets` | `ensure_set`, `promote_part_set`, `ensure_surface`, `node_set_by_coords` | which elements/nodes, side for surfaces |
+| reference point, RP, duplicate RPs · 參考點 | `rp` | `ensure_rp`, `find_rp`, `find_duplicate_rps` | coordinates (mm), tolerance |
+| coupling, RBE2/RBE3, tie, equation, cylindrical csys · 耦合、綁定、方程式 | `constraints` | `ensure_coupling`, `ensure_tie`, `pair_equations`, `ensure_cylindrical_csys` | DISTRIBUTING vs KINEMATIC, shell surface vs beam ring |
+| fix, support, encastre, prescribed displacement · 邊界條件、固定 | `bcs` | `ensure_displacement_bc`, `ensure_encastre` | region, which DOFs |
+| force, moment, pressure, gravity, inertia relief, change load, suppress · 力、力矩、壓力、重力、慣性釋放 | `loads` | `ensure_cforce`, `ensure_moment`, `ensure_pressure`, `ensure_gravity`, `ensure_inertia_relief`, `set_load_values`, `suppress_all_but` | magnitude + units, direction/frame, step, pressure side |
+| point mass, lumped mass, NSM · 集中質量、非結構質量 | `mass` | `ensure_point_mass` (takes TOTAL, splits per RP), `ensure_nsm` | total mass (tonne), which RPs/set |
+| step, NLGEOM, field/history output · 分析步、輸出 | `steps` | `ensure_static_step`, `set_field_outputs`, `ensure_history_output` | step name, nlgeom (needed for follower loads) |
+| run / submit job, write .inp · 送出計算 | `job` | `run_job`, `job_succeeded`, `write_input` | job name, cpus, work dir |
+| results, ODB, IRA/IRF/IRM, max stress/displacement · 讀結果 | `odb` | `ir_summary`, `history_last_values`, `field_max` | ODB path, Abaqus version that wrote it |
+| delete / clean up / rebuild features · 刪除、清理 | `cleanup` | `delete_in_order`, `delete_by_prefix` | names or prefix; RP coordinates |
+| what's in the CAE? audit · 檢查模型 | `scripts/inspect_model.py` | run standalone (read-only) | CAE path |
+
+Disambiguation:
+
+| Request | If... | Use |
+|---|---|---|
+| "connect RP to the structure" | load spreading, no added stiffness | `ensure_coupling(kind='DISTRIBUTING')` |
+| | rigid joint wanted | `ensure_coupling(kind='KINEMATIC')` |
+| | target is a beam node ring | `ensure_coupling(..., beam_ring=True)` with `constraints.node_region` |
+| "connect two meshes" | surfaces coincide, all DOFs | `ensure_tie` |
+| | only some DOFs (e.g. radial) | `pair_equations` with a cylindrical csys |
+| "add mass" | a few discrete points | `ensure_point_mass` (pass the TOTAL) |
+| | smeared over an element set | `ensure_nsm` |
+| "isolate one load's effect" | trim/IR diagnostics | `loads.suppress_all_but` + `job.run_job`, don't save the CAE |
+
+## Clarify before writing
+
+Ask instead of guessing when any of these is missing — wrong guesses
+here produce plausible-looking but wrong results:
+
+- **Units / frame** of every given number (N vs kN, N·m vs N·mm, global vs local csys).
+- **Load direction and sign**, and for pressure, which side of the surface it acts on.
+- **Total vs per-point** for masses and distributed forces.
+- **Which model / step** when the CAE has several.
+- **Coupling intent**: spread the load (DISTRIBUTING) or rigidly connect (KINEMATIC).
+- **Save or not**: diagnostic runs (suppress, trial loads) should not save the CAE.
 
 ## Collaboration Workflow (semi-automated modeling)
 
@@ -72,17 +118,26 @@ freely; anything that mutates a CAE goes through user confirmation.
 
 1. **Inspect** — run `scripts/inspect_model.py` (or a task-specific
    read-only probe) to confirm current state. No confirmation needed.
-2. **Write** — produce an idempotent script. All tunable values go in a
-   top "User inputs" block (`scripts/skill_template.py` style). No
-   config.py dependency.
+2. **Write** — compose abqlib calls in a copy of
+   `scripts/skill_template.py`. All tunable values go in its top
+   "User inputs" block. No config.py dependency.
 3. **Confirm** — show the user the script (at minimum the User inputs
    block and what it will mutate) and wait for approval before running.
 4. **Run** — `abaqus cae noGUI=<script>.py > _<script>.log 2>&1`, using
    the launcher matching the CAE version (see `references/projects.md`).
-5. **Verify** — re-run the inspect step and diff the two JSON snapshots
-   `inspect_model.py` writes (before vs after); report the diff to the
-   user. Results go to a report/JSON file, never stdout-only. Remind the
-   user to reopen the `.cae` if it is open in the GUI (it won't refresh).
+5. **Verify** — read the script's report file, re-run the inspect step
+   and diff the two JSON snapshots `inspect_model.py` writes (before vs
+   after); report the diff to the user. Remind the user to reopen the
+   `.cae` if it is open in the GUI (it won't refresh).
+
+Pre-run checklist (check before step 3):
+
+- [ ] CAE is not open in the GUI; launcher matches the CAE/ODB version.
+- [ ] Every number in User inputs has units and a source comment.
+- [ ] Loads are in an analysis step (not `Initial`); follower loads have NLGEOM on.
+- [ ] Point masses are passed as totals; gravity cases have density defined.
+- [ ] Deletions go through `cleanup.delete_in_order` (loads → constraints → sets → RPs).
+- [ ] Diagnostic scripts do not call `save_cae`.
 
 ## Bundled References
 
@@ -90,19 +145,21 @@ Load only what the task needs.
 
 | File | When to read |
 |------|--------------|
-| `references/abaqus_api.md` | **Read this first** for any API call. Top 10 gotchas, cookbook snippets, symbolic constants, imports cheatsheet, invocation patterns. |
+| `references/api_catalog.md` | **Read first when writing a script.** Every abqlib function by category with signature and one-line purpose. |
+| `references/abaqus_api.md` | For raw API calls abqlib doesn't cover, and the full gotcha table (36 traps) with mitigations. |
 | `references/projects.md` | **Read before touching any CAE.** Per-project profiles: CAE paths, Abaqus version launchers, model/part/instance names, script pipelines, known caveats. |
-| `references/patterns.md` | Read when you need to do something the project already does (fin loads, engine mass, equation constraints, calibration). Maps each task to the existing script that implements it. |
-| `references/conventions.md` | Read when creating a new script: units (mm-N-tonne), file layout, naming, logging, JSON reports, coding style for Abaqus Python (2.7 on ≤2023, 3.10 on 2024+). |
+| `references/patterns.md` | Multi-step workflows proven in production (beam orientation, load consolidation after re-import, trim superposition, section forces, calibration). |
+| `references/conventions.md` | Units, file layout, naming, logging, JSON reports, coding style for Abaqus Python (2.7 on ≤2023, 3.10 on 2024+). |
 
 ## Bundled Scripts
 
-Do not duplicate these — invoke or copy from them.
+Do not duplicate these — import, invoke, or copy from them.
 
 | File | Purpose |
 |------|---------|
-| `scripts/skill_template.py` | Boilerplate for new noGUI scripts — encoding header, standard imports, top "User inputs" block, report-file `log()`, `find_existing_rp` / `ensure_assembly_set` / `backup_cae` helpers, try/except main that never saves on failure. Copy this when creating a new script. |
-| `scripts/inspect_model.py` | Read-only inspector. Run with `abaqus cae noGUI=inspect_model.py -- <cae_path> [model_name\|-] [report_path]`. Writes a text report + JSON snapshot (default `_inspect_<cae>.txt/.json` in cwd): steps, parts, sets, surfaces, RPs (with duplicate detection), constraints, loads with per-step values from `loadStates`, suppressed flags, masses. |
+| `scripts/abqlib/` | Categorized function library (session, sets, rp, constraints, bcs, loads, mass, steps, job, odb, cleanup, util). Import after `sys.path.insert(0, SKILL_SCRIPTS_DIR)` — `__file__` is undefined in noGUI, so the path comes from the User inputs block. |
+| `scripts/skill_template.py` | Starting point for every new noGUI script: User inputs block, abqlib import, `Report` file output, try/except main that writes the traceback and never saves on failure, CAE backup before save. |
+| `scripts/inspect_model.py` | Read-only inspector, no abqlib dependency. `abaqus cae noGUI=inspect_model.py -- <cae_path> [model_name\|-] [report_path]`. Writes text + JSON snapshot (default `_inspect_<cae>.txt/.json` in cwd). |
 
 ## Project at a Glance
 
@@ -152,102 +209,76 @@ The full version with mitigations is in `references/abaqus_api.md`.
 
 ## Workflow Recipes (most common tasks)
 
-### "Apply a new load to an existing model"
+All recipes start from a copy of `scripts/skill_template.py` and end
+with the Collaboration Workflow's confirm → run → verify.
 
-1. Read `references/patterns.md` §5 (concentrated forces & moments).
-2. Add the magnitude to the script's top "User inputs" block with a
-   comment on its source.
-3. Copy `scripts/skill_template.py` → `apply_<thing>.py` in the
-   project's script directory (see `references/projects.md`).
-4. Inside, after `openMdb`, find the right model and step (`get_last_step`).
-5. Idempotent: delete the load if present, then `model.ConcentratedForce(...)`.
-6. Show the user the User inputs block and what will change; after
-   approval run `abaqus cae noGUI=apply_<thing>.py > _apply_<thing>.log 2>&1`.
-7. Read the script's report file, then run `scripts/inspect_model.py`
-   and diff against the pre-change snapshot.
+### "Apply a load at a point"
+
+```python
+k = rp.ensure_rp(asm, LOAD_POINT, tol=10.0, set_name='Thrust_RP')
+constraints.ensure_coupling(model, 'Thrust_Cpl', k, asm.surfaces['Mount_Surf'])  # DISTRIBUTING
+loads.ensure_cforce(model, 'Thrust', asm.sets['Thrust_RP'], (0.0, 0.0, THRUST_N))
+```
+
+For an existing load just change the value: `loads.set_load_values(model, 'Thrust', cf3=NEW)`.
 
 ### "Build a new derived model"
 
-1. Read `references/patterns.md` §1 and §12 (model copy, fin feature
-   delete order).
-2. `mdb.Model(name='New', objectToCopy=mdb.models['Source'])` →
-   `model.rootAssembly.regenerate()`.
-3. If geometry changes (rotate / mirror), call `assembly.rotate(...)`.
-4. Delete the features that must be rebuilt in order: loads,
-   constraints, sets, surfaces, then RP features by coordinate.
-5. Re-create features against the new geometry. Always look up RPs by
-   coordinate, never by stored ID.
+```python
+model = session.copy_model(mdb, 'Base', 'Derived')        # regenerates; RP ids may change
+model.rootAssembly.rotate(instanceList=(INST,), axisPoint=(0, 0, 0),
+                          axisDirection=(1, 0, 0), angle=45.0)
+cleanup.delete_in_order(model, loads=[...], constraints=[...], sets=[...],
+                        surfaces=[...], rp_points=OLD_RP_COORDS)
+# then rebuild features with ensure_* against the new geometry (RPs by coordinate)
+```
+
+### "Add masses"
+
+```python
+keys = [rp.ensure_rp(asm, p) for p in FIN_RP_COORDS]
+mass.ensure_point_mass(asm, 'Fin_Mass', keys, total_mass=FIN_TOTAL_T)  # split per RP for you
+mass.ensure_nsm(model.parts[PART], 'Payload_NSM', 'Payload', total_mass=PAYLOAD_T)
+```
 
 ### "Submit a job and pull IR results"
 
-1. Read `references/patterns.md` §10 and `references/abaqus_api.md`
-   "Submit a job and wait" + "Read history output from an .odb".
-2. `mdb.Job(name='Job_<config>_<loadcase>', model=name, type=ANALYSIS,
-   numCpus=4, numDomains=4)` → `job.submit(consistencyChecking=OFF)` →
-   `job.waitForCompletion()`.
-3. Skip-if-done: `if os.path.exists('%s.odb' % job_name): ...`.
-4. Open the `.odb` via `from odbAccess import openOdb` (this works in
-   `abaqus cae noGUI=...` and `abaqus python ...`).
-5. Pull last-frame `(time, value)` from `historyRegions[...].historyOutputs[var].data[-1][1]`.
-6. Convert IRA from mm/s² to g (÷9806.65) for human-readable output.
-7. Persist to `*_report.json`.
+```python
+ok = job.run_job(mdb, 'Job_Cfg1_MaxQ', MODEL_NAME, work_dir=WORK_DIR)   # skip-if-done
+if ok:
+    report.data['ir'] = odb.ir_summary(os.path.join(WORK_DIR, 'Job_Cfg1_MaxQ.odb'))
+```
 
-### "Read an existing ODB for post-processing"
+`job.status` is unreliable in noGUI; `run_job` reads the `.sta` instead.
+For ODB-only work run `abaqus python` with the launcher matching the ODB
+version (`OdbError: previous release` otherwise); see `references/patterns.md` §24.
 
-1. Read `references/patterns.md` §24 for the full ODB extraction pattern.
-2. **Match the Abaqus version** — if the ODB was created by Abaqus 2024,
-   use `abq2024 cae noGUI=script.py` or `abq2024 python script.py`.
-   Using the wrong version raises `OdbError: previous release`.
-3. Use `# -*- coding: utf-8 -*-` (NOT `mbcs`) to avoid encoding errors.
-4. **Always write results to a file** — `print()` stdout is unreliable
-   in PowerShell capture. Use `with open(path, 'w') as f: f.write(...)`.
-5. Open with `readOnly=True` to prevent accidental ODB corruption.
-6. For history outputs (IRA/IRF/IRM, energy): iterate
-   `odb.steps[step].historyRegions[region].historyOutputs`.
-7. For field outputs (U, S, RF): use `odb.steps[step].frames[-1].fieldOutputs['S']`.
-   Filter by set with `field.getSubset(region=odb.rootAssembly.elementSets['NAME'])`.
+### "Isolate one load's contribution (diagnostic, no save)"
+
+```python
+off = loads.suppress_all_but(model, keep=['AeroPressure'])
+job.run_job(mdb, 'Job_diag_aero', MODEL_NAME, skip_if_done=False)
+loads.resume_loads(model, off)          # and do NOT call session.save_cae
+```
+
+Use suppress, not cloned loads, for DISCRETE_FIELD pressures (gotcha #31).
 
 ### "Check what's in the CAE"
 
 1. Run `abaqus cae noGUI=<skill-path>/scripts/inspect_model.py -- <path/to/model.cae>`.
-2. Read the report it writes (`_inspect_<cae>.txt` in cwd, plus a
-   `.json` snapshot): steps, parts, sets, surfaces, RPs (duplicate
-   detection at 10 mm), constraints, loads with per-step values,
-   suppressed flags, masses.
-3. It does **not** save the CAE — safe to run anytime (but the CAE must
-   not be open in the GUI).
-
-### "Add a non-structural mass"
-
-1. Read `references/patterns.md` §8.
-2. Decide: is it tied to discrete RPs, or distributed over an element
-   set? RPs → `assembly.engineeringFeatures.PointMassInertia`. Element
-   set → `part.engineeringFeatures.NonstructuralMass(units=TOTAL_MASS,
-   distribution=MASS_PROPORTIONAL)`.
-3. Add the magnitude (in tonne) to the User inputs block.
-4. Idempotent: delete prior NSM with same name before recreating.
+2. Read `_inspect_<cae>.txt` (and the `.json` snapshot): steps, parts,
+   sets, surfaces, RPs with duplicate detection, constraints, loads with
+   per-step values, suppressed flags, masses.
+3. Read-only, safe anytime (but the CAE must not be open in the GUI).
 
 ### "Build a one-shot standalone analysis (no project CAE)"
 
-1. Read `references/abaqus_api.md` "Building a Model from Scratch" — covers
-   sketch, part, material, section, mesh, assembly, step, BC, load.
-2. Start from the auto-created `mdb` Abaqus provides at launch (the
-   template's `openMdb` line is for existing-CAE work).
-3. `os.chdir(...)` to your output dir before `job.submit()` so `.odb` and
-   friends land where you want.
-4. Skip `mdb.save()` for one-shot scripts; the .odb is the deliverable.
-5. Don't trust `job.status` in noGUI-from-CAE mode — read `.sta`/`.msg`
-   for the actual outcome.
-
-### "Build coupling between an RP and a beam node ring"
-
-1. Read `references/patterns.md` §4.
-2. Promote the part-level beam elset to an assembly node set first
-   (the project's `_Node`-suffix convention).
-3. `model.Coupling(controlPoint=Region(referencePoints=(rp,)),
-   surface=Region(nodes=node_set.nodes), couplingType=DISTRIBUTING,
-   influenceRadius=WHOLE_SURFACE, rotationalCouplingType=ROTATIONAL_STRUCTURAL,
-   ...)`.
+1. Read `references/abaqus_api.md` "Building a Model from Scratch" for
+   sketch, part, material, section, mesh (abqlib does not cover these yet).
+2. Then use abqlib for the rest: `steps.ensure_static_step`,
+   `bcs.ensure_encastre`, `loads.*`, `job.run_job(..., work_dir=...)`,
+   `odb.field_max`.
+3. Skip `save_cae` for one-shot scripts; the .odb is the deliverable.
 
 ## Common Mistakes
 
